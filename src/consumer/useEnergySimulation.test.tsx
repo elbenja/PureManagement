@@ -173,4 +173,50 @@ describe('useEnergySimulation', () => {
       isPlaying: false,
     })
   })
+
+  it('clears retained history when records become empty before being restored', () => {
+    const { result, rerender } = renderHook(
+      ({ source }: { source: typeof records }) => useEnergySimulation(source),
+      { initialProps: { source: records } },
+    )
+    act(() => result.current.scrubTo(1_000))
+    act(() => result.current.previousPeriod())
+    expect(result.current.live?.index).toBe(712)
+
+    rerender({ source: [] })
+    expect(result.current.live).toBeNull()
+    expect(result.current.history).toBeNull()
+
+    rerender({ source: records })
+    expect(result.current.live?.index).toBe(0)
+    expect(result.current.history?.range.canGoNext).toBe(false)
+
+    act(() => result.current.nextPeriod())
+    expect(result.current.live?.index).toBe(0)
+  })
+
+  it('resets for a different dataset but preserves history for an equivalent copy', () => {
+    const source = records.slice(0, 1_200)
+    const replacement = source.map((record, index) => {
+      if (index !== 0 && index !== source.length - 1) return record
+      return { ...record, iso: record.iso.replace('2026-08', '2026-09') }
+    })
+    const { result, rerender } = renderHook(
+      ({ current }: { current: typeof source }) => useEnergySimulation(current),
+      { initialProps: { current: source } },
+    )
+    act(() => result.current.scrubTo(1_000))
+    act(() => result.current.previousPeriod())
+    expect(result.current.live?.index).toBe(712)
+
+    rerender({ current: source.slice() })
+    expect(result.current.live?.index).toBe(712)
+
+    rerender({ current: replacement })
+    expect(result.current.live?.index).toBe(0)
+    expect(result.current.history?.range.canGoNext).toBe(false)
+
+    act(() => result.current.nextPeriod())
+    expect(result.current.live?.index).toBe(0)
+  })
 })

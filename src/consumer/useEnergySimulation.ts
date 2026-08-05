@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { EnergyInterval } from '../domain/energy'
 import { usePlayback } from '../playback/usePlayback'
 import { rangeSlots, type TimeRange } from '../simulation/aggregate'
@@ -31,6 +38,19 @@ export const useEnergySimulation = (
   const [range, setRangeState] = useState<TimeRange>('24h')
   const [historyAnchor, setHistoryAnchor] = useState<number | null>(null)
   const retainedLiveIndex = useRef(0)
+  const datasetKey = records.length === 0
+    ? 'empty'
+    : `${records.length}:${records[0]?.iso ?? ''}:${records.at(-1)?.iso ?? ''}`
+  const previousDatasetKey = useRef(datasetKey)
+
+  useLayoutEffect(() => {
+    if (datasetKey === previousDatasetKey.current) return
+
+    previousDatasetKey.current = datasetKey
+    retainedLiveIndex.current = 0
+    setHistoryAnchor(null)
+    playback.scrubTo(0)
+  }, [datasetKey, playback.scrubTo])
 
   useEffect(() => {
     if (historyAnchor === null) retainedLiveIndex.current = playback.index
