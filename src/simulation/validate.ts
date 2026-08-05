@@ -7,6 +7,7 @@ import { buildAugustClock } from './time'
 const scenario = LOS_ANGELES_AUGUST_2026
 const tolerance = 1e-8
 const intervalHours = scenario.intervalMinutes / 60
+const slotsPerDay = (24 * 60) / scenario.intervalMinutes
 const maximumErrors = 100
 const daylightStart = 6 * 60 + 5
 const daylightEnd = 19 * 60 + 45
@@ -82,6 +83,12 @@ const transferEnergy = (
   transfers: readonly Transfer[],
   predicate: (transfer: Transfer) => boolean,
 ) => transfers.reduce((total, transfer) => total + (predicate(transfer) ? transfer.kwh : 0), 0)
+
+interface DailyEvTravel {
+  tripKwh: number
+  eventCount: number
+  dayOfWeek: number
+}
 
 export const balanceError = (record: EnergyInterval): number => {
   const supply = record.solarKwh + record.batteryDischargeKwh + record.gridImportKwh
@@ -232,6 +239,42 @@ const validateAccounting = (
   }
 }
 
+const validateEvTravel = (
+  dailyTravel: readonly DailyEvTravel[],
+  monthlyTripKwh: number,
+  totalsValid: boolean,
+  records: readonly EnergyInterval[],
+  error: (message: string) => void,
+) => {
+  dailyTravel.forEach((travel, dayIndex) => {
+    const day = dayIndex + 1
+    if (travel.eventCount !== 1) {
+      error(`day ${day}: expected exactly one positive EV trip event; found ${travel.eventCount}`)
+    }
+
+    const miles = travel.tripKwh / scenario.ev.efficiencyKwhPerMile
+    const range = travel.dayOfWeek >= 1 && travel.dayOfWeek <= 5
+      ? scenario.ev.weekdayMiles
+      : scenario.ev.weekendMiles
+    if (!Number.isFinite(miles) || miles < range.min - tolerance || miles > range.max + tolerance) {
+      error(`day ${day}: daily EV trip mileage is outside configured bounds`)
+    }
+  })
+
+  if (!totalsValid || !closeEnough(monthlyTripKwh, scenario.ev.targetAugustKwh)) {
+    error('monthly EV trip energy does not reconcile to the scenario target')
+  }
+
+  const finalRecord: unknown = records[scenario.records - 1]
+  if (
+    !isRecord(finalRecord) ||
+    typeof finalRecord.vehicleSocEndKwh !== 'number' ||
+    !closeEnough(finalRecord.vehicleSocEndKwh, initialVehicleKwh)
+  ) {
+    error('final vehicle state does not return to the scenario initial state')
+  }
+}
+
 const runValidation = (records: readonly EnergyInterval[]): string[] => {
   const errors: string[] = []
   const error = (message: string) => {
@@ -242,6 +285,13 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
   const seenDayTypes = new Set<DayType>()
   const monthly = { solarKwh: 0, homeKwh: 0, evKwh: 0 }
   let monthlyTotalsValid = true
+  let monthlyTripKwh = 0
+  let tripTotalsValid = true
+  const dailyTravel: DailyEvTravel[] = Array.from({ length: 31 }, (_, dayIndex) => ({
+    tripKwh: 0,
+    eventCount: 0,
+    dayOfWeek: canonicalClock[dayIndex * slotsPerDay]!.dayOfWeek,
+  }))
 
   if (!Array.isArray(records)) return ['records must be an array']
   if (records.length !== scenario.records) {
@@ -254,6 +304,7 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     if (!isRecord(candidate)) {
       error(`index ${index}: missing or invalid record`)
       monthlyTotalsValid = false
+      tripTotalsValid = false
       continue
     }
     const record = candidate as unknown as EnergyInterval
@@ -408,6 +459,16 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
       }
     }
 
+    if (expectedClock && Number.isFinite(record.tripKwh) && record.tripKwh >= 0) {
+      const travel = dailyTravel[expectedClock.day - 1]!
+      travel.tripKwh += record.tripKwh
+      monthlyTripKwh += record.tripKwh
+      if (record.tripKwh > 0) travel.eventCount += 1
+      if (!Number.isFinite(travel.tripKwh) || !Number.isFinite(monthlyTripKwh)) {
+        tripTotalsValid = false
+      }
+    } else tripTotalsValid = false
+
     if (Number.isFinite(balanceError(record)) && balanceError(record) > tolerance) {
       error(`index ${index}: energy balance error exceeds tolerance`)
     }
@@ -425,6 +486,7 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
   dayTypes.forEach((dayType) => {
     if (!seenDayTypes.has(dayType)) error(`month is missing required day type ${dayType}`)
   })
+  validateEvTravel(dailyTravel, monthlyTripKwh, tripTotalsValid, records, error)
   if (monthlyTotalsValid) {
     const solarTarget = scenario.solar.targetAugustKwh
     if (Math.abs(monthly.solarKwh - solarTarget) > solarTarget * 0.02) {

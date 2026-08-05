@@ -173,6 +173,43 @@ describe('generateMonth', () => {
 })
 
 describe('validateMonth', () => {
+  it('rejects a missing day-31 trip even when vehicle chronology remains internally consistent', () => {
+    const records = mutableMonth()
+    const tripIndex = records.findIndex((record) => record.day === 31 && record.tripKwh > 0)
+    const removedTripKwh = records[tripIndex]!.tripKwh
+    records[tripIndex]!.tripKwh = 0
+
+    for (let index = tripIndex; index < records.length; index += 1) {
+      if (index === tripIndex) records[index]!.vehicleSocEndKwh += removedTripKwh
+      else {
+        records[index]!.vehicleSocStartKwh += removedTripKwh
+        records[index]!.vehicleSocEndKwh += removedTripKwh
+      }
+    }
+
+    expect(Math.max(...records.slice(tripIndex).flatMap((record) => [
+      record.vehicleSocStartKwh,
+      record.vehicleSocEndKwh,
+    ]))).toBeLessThanOrEqual(scenario.ev.capacityKwh)
+    const errors = validateMonth(records).join('\n')
+    expect(errors).toMatch(/day 31.*exactly one.*trip/i)
+    expect(errors).toMatch(/monthly EV trip.*target/i)
+    expect(errors).toMatch(/final vehicle.*initial/i)
+  })
+
+  it('rejects a split daily trip even when daily and monthly energy still reconcile', () => {
+    const records = mutableMonth()
+    const tripIndex = records.findIndex((record) => record.day === 31 && record.tripKwh > 0)
+    const splitTripKwh = records[tripIndex]!.tripKwh / 2
+
+    records[tripIndex]!.tripKwh = splitTripKwh
+    records[tripIndex]!.vehicleSocEndKwh += splitTripKwh
+    records[tripIndex + 1]!.vehicleSocStartKwh += splitTripKwh
+    records[tripIndex + 1]!.tripKwh = splitTripKwh
+
+    expect(validateMonth(records).join('\n')).toMatch(/day 31.*exactly one.*trip/i)
+  })
+
   it.each([
     [
       'a missing final record',
