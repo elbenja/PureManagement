@@ -1,3 +1,105 @@
 body {
   margin: 0;
+  color: #1b2430;
+  background: #f4f6f8;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  padding: 0.45rem 0.75rem;
+}
+
+button[aria-pressed='true'] {
+  font-weight: 700;
+  outline: 2px solid currentColor;
+}
+
+.simulation-inspector {
+  box-sizing: border-box;
+  width: min(100%, 72rem);
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.simulation-inspector section,
+.simulation-inspector details {
+  margin-block: 1.5rem;
+  padding: 1rem;
+  border: 1px solid #c8d0d8;
+  background: #fff;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-block: 0.75rem;
+}
+
+.scrubber {
+  display: grid;
+  grid-template-columns: auto minmax(12rem, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.inspection-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1rem;
+}
+
+.inspection-fields div {
+  min-width: 0;
+}
+
+.inspection-fields dt {
+  font-weight: 700;
+}
+
+.inspection-fields dd {
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 0.5rem;
+  border: 1px solid #c8d0d8;
+  text-align: left;
+}
+
+pre {
+  max-height: 32rem;
+  overflow: auto;
+  padding: 1rem;
+  background: #eef1f4;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 40rem) {
+  .simulation-inspector {
+    padding: 0.75rem;
+  }
+
+  .simulation-inspector section {
+    overflow-x: auto;
+  }
+
+  .scrubber {
+    grid-template-columns: 1fr;
+  }
 }
