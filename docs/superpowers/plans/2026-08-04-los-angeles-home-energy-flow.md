@@ -38,7 +38,7 @@ Use them for hierarchy, tone, and interaction reference only. Do not embed eithe
 | `src/simulation/accounting.ts` | Tariff, NEM credit, savings, and carbon calculations |
 | `src/simulation/generateMonth.ts` | End-to-end deterministic ledger generation |
 | `src/simulation/validate.ts` | Interval and month rejection checks |
-| `src/simulation/aggregate.ts` | Day, week, month, and prefix totals |
+| `src/simulation/aggregate.ts` | Trailing 24-hour, 7-day, 31-day, and prefix totals |
 | `src/playback/playback.ts` | Pure timing and interpolation functions |
 | `src/playback/usePlayback.ts` | React playback, pause, jump, and scrub state |
 | `src/components/MetricCard.tsx` | Reusable KPI card |
@@ -581,6 +581,7 @@ git commit -m "feat: route solar battery and grid energy"
 - Create: `src/simulation/accounting.ts`
 - Create: `src/simulation/aggregate.ts`
 - Test: `src/simulation/accounting.test.ts`
+- Test: `src/simulation/aggregate.test.ts`
 
 - [ ] **Step 1: Write failing accounting tests**
 
@@ -630,14 +631,34 @@ export function accountInterval(input: AccountingInput): AccountingResult {
 
 `aggregateIntervals(records)` must sum solar, home+EV consumption, grid bought, grid sent, battery charge/discharge, import cost, export credit, counterfactual cost, savings, and avoided CO2e. `buildPrefixTotals(records)` must return 8,929 entries beginning with zero so cumulative cards can read totals at any playback index without rescanning the month.
 
+Add `TimeRange = '24h' | '7d' | '31d'`, `rangeSlots = { '24h': 288, '7d': 2_016, '31d': 8_928 }`, and `getTrailingWindow(range, anchorIndex, recordCount)`. The helper returns inclusive start/end indexes, clamps at the dataset boundaries, and exposes `canGoPrevious` and `canGoNext` for the navigation controls.
+
+Cover the window boundaries with this focused test:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { getTrailingWindow } from './aggregate';
+
+describe('trailing history windows', () => {
+  it('moves through 24-hour history and stops at dataset boundaries', () => {
+    expect(getTrailingWindow('24h', 575, 8_928)).toMatchObject({ start: 288, end: 575, canGoPrevious: true, canGoNext: true });
+    expect(getTrailingWindow('24h', 287, 8_928)).toMatchObject({ start: 0, end: 287, canGoPrevious: false });
+  });
+
+  it('clamps the month view to August', () => {
+    expect(getTrailingWindow('31d', 8_927, 8_928)).toEqual({ start: 0, end: 8_927, canGoPrevious: false, canGoNext: false });
+  });
+});
+```
+
 - [ ] **Step 5: Verify and commit accounting**
 
-Run: `bun test src/simulation/accounting.test.ts && bun run build`
+Run: `bun test src/simulation/accounting.test.ts src/simulation/aggregate.test.ts && bun run build`
 
-Expected: two passing accounting tests and successful build.
+Expected: four passing accounting/aggregation tests and successful build.
 
 ```bash
-git add src/simulation/accounting.ts src/simulation/accounting.test.ts src/simulation/aggregate.ts
+git add src/simulation/accounting.ts src/simulation/accounting.test.ts src/simulation/aggregate.ts src/simulation/aggregate.test.ts
 git commit -m "feat: calculate energy economics and carbon"
 ```
 
@@ -760,7 +781,7 @@ export function interpolatePower(start: number, end: number, fraction: number): 
 
 - [ ] **Step 4: Implement the React playback controller**
 
-`usePlayback(recordCount)` uses `requestAnimationFrame`, elapsed real time, and a floating-point position. Return `index`, `fraction`, `isPlaying`, `play`, `pause`, `toggle`, `scrubTo(index)`, and `jumpDay(delta)`; clamp manual navigation and wrap only automatic playback. Cancel the animation frame on unmount.
+`usePlayback(recordCount)` uses `requestAnimationFrame`, elapsed real time, and a floating-point position. Return `index`, `fraction`, `isPlaying`, `play`, `pause`, `toggle`, `scrubTo(index)`, `jumpDay(delta)`, and `setHistoryAnchor(index)`; clamp manual navigation and wrap only automatic playback. Selecting a past history anchor pauses playback. Resuming playback clears the history offset and returns the anchor to the advancing playback position. Cancel the animation frame on unmount.
 
 Only interpolate instantaneous kW and state of charge between `records[index]` and `records[index + 1]`. Read cumulative totals from the prefix entry at `index + 1`, never from interpolated values.
 
@@ -790,7 +811,7 @@ git commit -m "feat: add monthly energy playback"
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MetricCard } from './MetricCard';
-import { PlaybackControls } from './PlaybackControls';
+import { PlaybackControls, TimeRangeControls } from './PlaybackControls';
 
 it('exposes a metric label and formatted value', () => {
   render(<MetricCard label="Money saved" value="$381.20" detail="Modeled energy savings" />);
@@ -807,6 +828,17 @@ it('supports playback and scrubbing from labeled controls', () => {
   expect(toggle).toHaveBeenCalledOnce();
   expect(scrub).toHaveBeenCalledWith(144);
 });
+
+it('selects and navigates trailing history windows', () => {
+  const changeRange = vi.fn();
+  const previous = vi.fn();
+  render(<TimeRangeControls range="24h" rangeLabel="Aug 30, 12:00 – Aug 31, 12:00" canGoPrevious canGoNext={false} onRangeChange={changeRange} onPreviousPeriod={previous} onNextPeriod={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Last week' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Previous period' }));
+  expect(changeRange).toHaveBeenCalledWith('7d');
+  expect(previous).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'Next period' })).toBeDisabled();
+});
 ```
 
 - [ ] **Step 2: Run and confirm the missing-component failure**
@@ -822,6 +854,8 @@ Expected: FAIL because the components do not exist.
 - [ ] **Step 4: Implement playback controls**
 
 Use real `<button>` elements for previous day, play/pause, and next day, plus `<input type="range" min={0} max={count - 1}>`. Give every control an explicit accessible name. The play label alternates between `Play August` and `Pause August`.
+
+Add a `TimeRangeControls` section to the same file with segmented buttons labeled `Last 24h`, `Last week`, and `Last month`, previous/next period buttons, disabled boundary states, and a visible date-range label. Its callbacks are `onRangeChange(range)`, `onPreviousPeriod()`, and `onNextPeriod()`.
 
 - [ ] **Step 5: Verify and commit the components**
 
@@ -906,6 +940,9 @@ it('uses the approved energy and money language', () => {
   expect(screen.getByText('Money saved')).toBeVisible();
   expect(screen.getByText('Export credit earned')).toBeVisible();
   expect(screen.getByText('CO2e avoided')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Last 24h' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Last week' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Last month' })).toBeVisible();
   expect(screen.queryByText(/money made/i)).not.toBeInTheDocument();
 });
 ```
@@ -918,7 +955,7 @@ Expected: FAIL because `Dashboard.tsx` does not exist.
 
 - [ ] **Step 3: Compose the live and cumulative views**
 
-`Dashboard` generates prefix totals once with `useMemo`, uses `usePlayback`, interpolates live kW/SoC, and passes current transfers to `EnergyFlowMap`. Add day/week/month segmented buttons. Their cards aggregate the selected calendar slice; the live map always reflects the current interval. Include cards for solar produced, energy consumed, money saved, export credit earned, CO2e avoided, battery charge, grid bought, and grid sent.
+`Dashboard` generates prefix totals once with `useMemo`, uses `usePlayback`, interpolates live kW/SoC, and passes current transfers to `EnergyFlowMap`. Add the `Last 24h`, `Last week`, and `Last month` filters and previous/next period navigation. Cards aggregate the selected trailing ledger slice; the live map reflects the interval at the history anchor. Selecting the previous period pauses playback, and resuming playback returns the anchor to the current live position. Include cards for solar produced, energy consumed, money saved, export credit earned, CO2e avoided, battery charge, grid bought, and grid sent.
 
 Use `Intl.NumberFormat('en-US')` for kWh, dollars, and kilograms. Show the date/time, `LADWP · Zone 2`, and `Modeled August 2026` so the synthetic context stays visible.
 
@@ -993,7 +1030,7 @@ At representative timestamps, confirm:
 
 - [ ] **Step 4: Verify interaction and responsive states**
 
-Pause, resume, scrub to the first and last intervals, jump backward/forward one day, and switch day/week/month. Confirm all cards recalculate consistently. Inspect at approximately 1440×900, 768×1024, and 390×844; confirm no horizontal overflow, clipped controls, unreadable text, or missing focus indication. Enable reduced motion and confirm flow direction remains understandable.
+Pause, resume, scrub to the first and last intervals, jump backward/forward one day, and switch between Last 24h, Last week, and Last month. Navigate backward and forward by the selected period; confirm boundary buttons disable, the date range changes, and all cards recalculate consistently. Inspect at approximately 1440×900, 768×1024, and 390×844; confirm no horizontal overflow, clipped controls, unreadable text, or missing focus indication. Enable reduced motion and confirm flow direction remains understandable.
 
 - [ ] **Step 5: Record final evidence and commit any scoped corrections**
 
@@ -1010,7 +1047,7 @@ Implementation is complete only when:
 
 - The fixed seed produces exactly 8,928 valid records with 1,414.65 kWh solar, 1,825 kWh home load, and 340 kWh EV charging.
 - Every interval conserves energy and respects battery, solar, EV, and grid invariants.
-- Day, week, month, and cumulative values derive from the ledger.
+- Last 24h, Last week, Last month, and cumulative values derive from the ledger and support bounded past-period navigation.
 - Playback runs at one simulated day per minute and survives pause, jump, and scrub actions.
 - The interface uses `Export credit earned` and never describes LADWP NEM credit as cash income.
 - All automated checks pass and the desktop/mobile browser review covers the representative timestamps above.

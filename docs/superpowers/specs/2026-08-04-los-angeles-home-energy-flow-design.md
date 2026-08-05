@@ -49,6 +49,7 @@ The simulation should let a viewer:
 5. See grid buying and selling as separate, mutually exclusive states.
 6. Connect physical energy flows to savings, export credit, and avoided emissions.
 7. Pause, scrub, or jump through the month without the numbers changing between replays.
+8. Review trailing energy history using Last 24h, Last week, and Last month views, then move backward or forward by the selected period.
 
 The default playback rate is **one simulated day per real minute**. Five-minute records are interpolated for visually smooth transitions while accounting totals remain based on the original records.
 
@@ -241,7 +242,9 @@ The data layer supports modular components corresponding to the reference design
 
 Flow lines animate only when their ledger flow is positive. Direction follows source to destination; visual speed or pulse density scales with power. Zero-flow connections remain quiet. During interpolation, the interface may smooth displayed kW and state-of-charge values, but cumulative kWh, money, and carbon totals advance only from validated ledger records.
 
-The viewer can play/pause, scrub to any interval, jump by day, and switch summary aggregation between day, week, and month. Scrubbing reconstructs every card from the selected ledger position, so no component becomes inconsistent with another.
+The viewer can play/pause, scrub to any interval, and jump by day. Summary filters are labeled **Last 24h**, **Last week**, and **Last month**. Each filter shows the trailing window ending at the selected history anchor. Previous/next period controls shift that anchor by 24 hours, 7 days, or 31 days; controls disable when the requested window would fall outside the August dataset. Selecting a past period pauses playback, while resuming playback returns the history anchor to the live playback position. A visible date-range label makes the active window unambiguous.
+
+Scrubbing or changing the history window reconstructs every card and chart from the ledger slice, so no component becomes inconsistent with another. The live energy map reflects the interval at the active anchor.
 
 ## 12. Validation and tests
 
@@ -299,6 +302,7 @@ The design succeeds when:
 4. Every displayed total can be traced to the immutable interval ledger.
 5. Savings and exports use accurate language: modeled savings and banked export credit, not guaranteed income.
 6. The simulation can replay smoothly at one day per minute and remain consistent after pause, jump, and scrub actions.
+7. The Last 24h, Last week, and Last month filters produce consistent trailing totals and respect the beginning and end of the August dataset.
 
 ## 15. Sources
 
