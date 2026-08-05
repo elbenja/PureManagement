@@ -35,12 +35,19 @@ const tolerance = 1e-10
 
 type LoadAllocation = { homeKwh: number; evKwh: number; remainingKwh: number }
 
-const nonNegative = (value: number) => Math.max(0, value)
+const nonNegative = (value: number) => (value <= tolerance ? 0 : value)
+
+const closeEnough = (left: number, right: number) => Math.abs(left - right) <= tolerance
+
+const transferTotal = (
+  transfers: Transfer[],
+  predicate: (transfer: Transfer) => boolean,
+) => transfers.filter(predicate).reduce((total, transfer) => total + transfer.kwh, 0)
 
 const allocateLoad = (availableKwh: number, homeKwh: number, evKwh: number): LoadAllocation => {
-  const servedHomeKwh = Math.min(availableKwh, homeKwh)
+  const servedHomeKwh = nonNegative(Math.min(availableKwh, homeKwh))
   const afterHomeKwh = nonNegative(availableKwh - servedHomeKwh)
-  const servedEvKwh = Math.min(afterHomeKwh, evKwh)
+  const servedEvKwh = nonNegative(Math.min(afterHomeKwh, evKwh))
 
   return {
     homeKwh: servedHomeKwh,
@@ -55,7 +62,7 @@ const addTransfer = (
   destination: EnergyNode,
   kwh: number,
 ) => {
-  if (kwh <= 0) return
+  if (kwh <= tolerance) return
 
   transfers.push({
     source,
@@ -73,8 +80,18 @@ const validateInput = (input: RouterInput) => {
   ]
 
   energyFields.forEach((field) => {
-    if (!Number.isFinite(input[field]) || input[field] < 0) throw new Error(`Invalid ${field}`)
+    if (
+      !Number.isFinite(input[field]) ||
+      input[field] < 0 ||
+      !Number.isFinite(input[field] / intervalHours)
+    ) {
+      throw new Error(`Invalid ${field}`)
+    }
   })
+
+  if (!Number.isFinite(input.homeKwh + input.evKwh)) {
+    throw new Error('Invalid aggregate demand')
+  }
 
   if (
     !Number.isFinite(input.batterySocKwh) ||
@@ -82,6 +99,10 @@ const validateInput = (input: RouterInput) => {
     input.batterySocKwh > scenario.battery.capacityKwh
   ) {
     throw new Error('Invalid batterySocKwh')
+  }
+
+  if (!Number.isFinite(input.solarKwh + input.batterySocKwh)) {
+    throw new Error('Invalid aggregate supply')
   }
 
   if (
@@ -136,7 +157,7 @@ const verifyResult = (input: RouterInput, result: RouterResult) => {
       transfer.kwh <= 0 ||
       transfer.kw <= 0 ||
       !approvedPairs.has(`${transfer.source}-${transfer.destination}`) ||
-      Math.abs(transfer.kw - transfer.kwh / intervalHours) > tolerance
+      !closeEnough(transfer.kw, transfer.kwh / intervalHours)
     ) {
       throw new Error('Router invariant failed: invalid transfer')
     }
@@ -151,8 +172,50 @@ const verifyResult = (input: RouterInput, result: RouterResult) => {
     result.chargeLossKwh +
     result.dischargeLossKwh
 
-  if (Math.abs(suppliedKwh - consumedKwh) > tolerance) {
+  if (!closeEnough(suppliedKwh, consumedKwh)) {
     throw new Error('Router invariant failed: energy is not conserved')
+  }
+
+  const solarTransfersKwh = transferTotal(result.transfers, (transfer) => transfer.source === 'solar')
+  const homeTransfersKwh = transferTotal(result.transfers, (transfer) => transfer.destination === 'home')
+  const evTransfersKwh = transferTotal(result.transfers, (transfer) => transfer.destination === 'ev')
+  const gridImportTransfersKwh = transferTotal(result.transfers, (transfer) => transfer.source === 'grid')
+  const gridExportTransfersKwh = transferTotal(
+    result.transfers,
+    (transfer) => transfer.source === 'solar' && transfer.destination === 'grid',
+  )
+  const batteryChargeTransfersKwh = transferTotal(
+    result.transfers,
+    (transfer) => transfer.source === 'solar' && transfer.destination === 'battery',
+  )
+  const batteryDischargeTransfersKwh = transferTotal(
+    result.transfers,
+    (transfer) => transfer.source === 'battery',
+  )
+
+  if (
+    !closeEnough(solarTransfersKwh, input.solarKwh) ||
+    !closeEnough(homeTransfersKwh, input.homeKwh) ||
+    !closeEnough(evTransfersKwh, input.evKwh) ||
+    !closeEnough(gridImportTransfersKwh, result.gridImportKwh) ||
+    !closeEnough(gridExportTransfersKwh, result.gridExportKwh) ||
+    !closeEnough(batteryChargeTransfersKwh, result.batteryChargeKwh + result.chargeLossKwh) ||
+    !closeEnough(batteryDischargeTransfersKwh, result.batteryDischargeKwh - result.dischargeLossKwh)
+  ) {
+    throw new Error('Router invariant failed: transfers do not reconcile')
+  }
+
+  if (
+    transferTotal(result.transfers, (transfer) => transfer.source === 'battery') / intervalHours >
+      scenario.battery.maxPowerKw + tolerance ||
+    transferTotal(
+      result.transfers,
+      (transfer) => transfer.source === 'solar' && transfer.destination === 'battery',
+    ) /
+      intervalHours >
+      scenario.battery.maxPowerKw + tolerance
+  ) {
+    throw new Error('Router invariant failed: battery AC power limit exceeded')
   }
 }
 
@@ -167,10 +230,12 @@ export const routeInterval = (input: RouterInput): RouterResult => {
   const remainingHomeKwh = nonNegative(input.homeKwh - solarAllocation.homeKwh)
   const remainingEvKwh = nonNegative(input.evKwh - solarAllocation.evKwh)
   const availableBatteryCapacityKwh = scenario.battery.capacityKwh - input.batterySocKwh
-  const chargeAcKwh = Math.min(
-    solarAllocation.remainingKwh,
-    maxAcKwhPerInterval,
-    availableBatteryCapacityKwh / batteryEfficiency,
+  const chargeAcKwh = nonNegative(
+    Math.min(
+      solarAllocation.remainingKwh,
+      maxAcKwhPerInterval,
+      availableBatteryCapacityKwh / batteryEfficiency,
+    ),
   )
   const batteryChargeKwh = nonNegative(chargeAcKwh * batteryEfficiency)
   const chargeLossKwh = nonNegative(chargeAcKwh - batteryChargeKwh)
@@ -183,9 +248,11 @@ export const routeInterval = (input: RouterInput): RouterResult => {
   const inDispatchWindow =
     input.minuteOfDay >= dispatchStartMinute && input.minuteOfDay < dispatchEndMinute
   const availableBatteryDischargeKwh = (input.batterySocKwh - reserveKwh) * batteryEfficiency
-  const batteryDeliveredKwh = inDispatchWindow
-    ? Math.min(demandKwh, maxAcKwhPerInterval, availableBatteryDischargeKwh)
-    : 0
+  const batteryDeliveredKwh = nonNegative(
+    inDispatchWindow
+      ? Math.min(demandKwh, maxAcKwhPerInterval, availableBatteryDischargeKwh)
+      : 0,
+  )
   const batteryDischargeKwh = nonNegative(batteryDeliveredKwh / batteryEfficiency)
   const dischargeLossKwh = nonNegative(batteryDischargeKwh - batteryDeliveredKwh)
   const batteryAllocation = allocateLoad(batteryDeliveredKwh, remainingHomeKwh, remainingEvKwh)

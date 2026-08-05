@@ -13,6 +13,12 @@ const transferKwh = (transfers: Transfer[], source: Transfer['source'], destinat
     .filter((transfer) => transfer.source === source && transfer.destination === destination)
     .reduce((total, transfer) => total + transfer.kwh, 0)
 
+const transfersFrom = (transfers: Transfer[], source: Transfer['source']) =>
+  transfers.filter((transfer) => transfer.source === source).reduce((total, transfer) => total + transfer.kwh, 0)
+
+const transfersTo = (transfers: Transfer[], destination: Transfer['destination']) =>
+  transfers.filter((transfer) => transfer.destination === destination).reduce((total, transfer) => total + transfer.kwh, 0)
+
 const expectConserved = (input: Parameters<typeof routeInterval>[0]) => {
   const result = routeInterval(input)
   const supplied = input.solarKwh + result.batteryDischargeKwh + result.gridImportKwh
@@ -154,9 +160,12 @@ describe('routeInterval', () => {
     })
 
     ;[highCharge, highDischarge].forEach((result) => {
-      result.transfers
-        .filter((transfer) => transfer.source === 'battery' || transfer.destination === 'battery')
-        .forEach((transfer) => expect(transfer.kw).toBeLessThanOrEqual(scenario.battery.maxPowerKw))
+      expect(
+        transfersFrom(result.transfers, 'battery') / intervalHours,
+      ).toBeLessThanOrEqual(scenario.battery.maxPowerKw)
+      expect(
+        transferKwh(result.transfers, 'solar', 'battery') / intervalHours,
+      ).toBeLessThanOrEqual(scenario.battery.maxPowerKw)
       expect(result.batterySocEndKwh).toBeGreaterThanOrEqual(reserveKwh)
       expect(result.batterySocEndKwh).toBeLessThanOrEqual(scenario.battery.capacityKwh)
     })
@@ -208,12 +217,60 @@ describe('routeInterval', () => {
   })
 
   it.each([
+    [scenario.battery.capacityKwh, 12 * 60],
+    [scenario.battery.capacityKwh - 1e-12, 12 * 60],
+    [reserveKwh + 1e-12, 18 * 60],
+  ])('removes sub-tolerance route residues at battery state %f', (batterySocKwh, minuteOfDay) => {
+    const result = routeInterval({
+      solarKwh: 0.3,
+      homeKwh: 0.1,
+      evKwh: 0.2,
+      batterySocKwh,
+      minuteOfDay,
+    })
+
+    expect(result.batteryChargeKwh).toBe(0)
+    expect(result.batteryDischargeKwh).toBe(0)
+    expect(result.gridImportKwh).toBe(0)
+    expect(result.gridExportKwh).toBe(0)
+    expect(result.transfers.every((transfer) => transfer.kwh > 1e-10)).toBe(true)
+    expect(result.transfers.some((transfer) => transfer.source === 'battery' || transfer.destination === 'battery')).toBe(false)
+    expect(result.transfers.some((transfer) => transfer.source === 'grid' || transfer.destination === 'grid')).toBe(false)
+  })
+
+  it.each([
+    { solarKwh: 1, homeKwh: 0.2, evKwh: 0, batterySocKwh: 10, minuteOfDay: 12 * 60 },
+    { solarKwh: 0.1, homeKwh: 1, evKwh: 0.25, batterySocKwh: 3, minuteOfDay: 18 * 60 },
+    { solarKwh: 0, homeKwh: 0.4, evKwh: 0.8, batterySocKwh: reserveKwh, minuteOfDay: 22 * 60 },
+  ])('reconciles every transfer total to its interval ledger', (input) => {
+    const result = routeInterval(input)
+
+    expect(transfersFrom(result.transfers, 'solar')).toBeCloseTo(input.solarKwh, 12)
+    expect(transfersTo(result.transfers, 'home')).toBeCloseTo(input.homeKwh, 12)
+    expect(transfersTo(result.transfers, 'ev')).toBeCloseTo(input.evKwh, 12)
+    expect(transfersFrom(result.transfers, 'grid')).toBeCloseTo(result.gridImportKwh, 12)
+    expect(transferKwh(result.transfers, 'solar', 'grid')).toBeCloseTo(result.gridExportKwh, 12)
+    expect(transferKwh(result.transfers, 'solar', 'battery')).toBeCloseTo(
+      result.batteryChargeKwh + result.chargeLossKwh,
+      12,
+    )
+    expect(transfersFrom(result.transfers, 'battery')).toBeCloseTo(
+      result.batteryDischargeKwh - result.dischargeLossKwh,
+      12,
+    )
+    if (input.solarKwh === 0) expect(transfersFrom(result.transfers, 'solar')).toBe(0)
+  })
+
+  it.each([
     ['solarKwh', { solarKwh: Number.NaN }],
     ['solarKwh', { solarKwh: -0.01 }],
+    ['solarKwh', { solarKwh: Number.MAX_VALUE }],
     ['homeKwh', { homeKwh: -0.01 }],
     ['homeKwh', { homeKwh: Number.POSITIVE_INFINITY }],
+    ['homeKwh', { homeKwh: Number.MAX_VALUE }],
     ['evKwh', { evKwh: Number.POSITIVE_INFINITY }],
     ['evKwh', { evKwh: -0.01 }],
+    ['evKwh', { evKwh: Number.MAX_VALUE }],
     ['batterySocKwh', { batterySocKwh: Number.NaN }],
     ['batterySocKwh', { batterySocKwh: reserveKwh - 0.01 }],
     ['batterySocKwh', { batterySocKwh: scenario.battery.capacityKwh + 0.01 }],
