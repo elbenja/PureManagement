@@ -292,14 +292,16 @@ Version 1 includes one synthetic Los Angeles detached-home scenario for August 2
 
 These exclusions keep the first implementation focused on a trustworthy energy-flow story and reusable UI component contract.
 
+The implementation deliverable is the simulation engine and its component-facing data contract: stable TypeScript types, deterministic records, transfer routes, historical selectors, playback state, framework-neutral exports, and a small inspection screen for verification. The final dashboard components, visual composition, and production styling are intentionally left for the product designer to create against that contract.
+
 ## 14. Success criteria
 
 The design succeeds when:
 
 1. A complete August dataset is deterministic, valid, and internally balanced.
-2. A viewer can identify the active source and destination of energy without reading documentation.
+2. A consuming component can identify every active source, destination, direction, and power value directly from the transfer records.
 3. Battery, grid, EV, and solar behavior looks plausible across normal, hot, weekend, and cloudy days.
-4. Every displayed total can be traced to the immutable interval ledger.
+4. Every exposed total and view model can be traced to the immutable interval ledger.
 5. Savings and exports use accurate language: modeled savings and banked export credit, not guaranteed income.
 6. The simulation can replay smoothly at one day per minute and remain consistent after pause, jump, and scrub actions.
 7. The Last 24h, Last week, and Last month filters produce consistent trailing totals and respect the beginning and end of the August dataset.

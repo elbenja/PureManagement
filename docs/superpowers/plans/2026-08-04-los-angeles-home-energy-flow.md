@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a polished browser prototype that deterministically generates and replays the approved August 2026 Woodland Hills household energy scenario.
+**Goal:** Build a component-ready simulation library that deterministically generates, aggregates, navigates, and replays the approved August 2026 Woodland Hills household energy scenario.
 
-**Architecture:** A pure TypeScript simulation generates 8,928 validated five-minute ledger records from one versioned scenario and seed. React reads that immutable ledger through a playback controller; every flow, card, chart, money value, and carbon value derives from the same selected interval or aggregate. The prototype is entirely local and has no backend or live API dependency.
+**Architecture:** A pure TypeScript simulation generates 8,928 validated five-minute ledger records from one versioned scenario and seed. Framework-neutral selectors convert that immutable ledger into live frames, historical windows, transfers, and aggregates; a thin React hook exposes playback state to future components. A minimal inspector verifies the contract, but finished dashboard components and styling are outside this implementation.
 
-**Tech Stack:** Bun, React 19, TypeScript, Vite 8, Vitest 4, Testing Library, Lucide React, semantic HTML, SVG, and plain CSS
+**Tech Stack:** Bun, React 19, TypeScript, Vite 8, Vitest 4, Testing Library, semantic HTML, and minimal plain CSS
 
 ---
 
@@ -41,13 +41,12 @@ Use them for hierarchy, tone, and interaction reference only. Do not embed eithe
 | `src/simulation/aggregate.ts` | Trailing 24-hour, 7-day, 31-day, and prefix totals |
 | `src/playback/playback.ts` | Pure timing and interpolation functions |
 | `src/playback/usePlayback.ts` | React playback, pause, jump, and scrub state |
-| `src/components/MetricCard.tsx` | Reusable KPI card |
-| `src/components/EnergyFlowMap.tsx` | Nodes and animated directional connections |
-| `src/components/EnergyChart.tsx` | Compact time-series chart |
-| `src/components/PlaybackControls.tsx` | Play/pause, day jump, and scrub controls |
-| `src/components/Dashboard.tsx` | Composition and aggregation selection |
-| `src/App.tsx` | Dataset generation, failure boundary, and dashboard entry |
-| `src/styles.css` | Responsive light/dark visual system and motion |
+| `src/consumer/views.ts` | Framework-neutral live-frame and historical-window selectors |
+| `src/consumer/useEnergySimulation.ts` | Thin React playback and history-navigation adapter |
+| `src/index.ts` | Stable public exports for future components |
+| `src/inspector/SimulationInspector.tsx` | Minimal human-readable data-contract inspection screen |
+| `src/App.tsx` | Dataset generation, failure boundary, and inspector entry |
+| `src/styles.css` | Minimal readable inspector styling |
 | `src/test/setup.ts` | DOM matcher setup |
 | `src/**/*.test.ts(x)` | Focused and integration tests beside their units |
 
@@ -796,209 +795,170 @@ git add src/playback
 git commit -m "feat: add monthly energy playback"
 ```
 
-## Task 10: Build reusable metric and control components
+## Task 10: Build component-ready view selectors
 
 **Files:**
-- Create: `src/components/MetricCard.tsx`
-- Create: `src/components/EnergyChart.tsx`
-- Create: `src/components/PlaybackControls.tsx`
-- Test: `src/components/MetricCard.test.tsx`
-- Test: `src/components/PlaybackControls.test.tsx`
+- Create: `src/consumer/views.ts`
+- Test: `src/consumer/views.test.ts`
 
-- [ ] **Step 1: Write failing accessibility tests**
+- [ ] **Step 1: Write failing selector tests**
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { generateMonth } from '../simulation/generateMonth';
+import { getHistoryView, getLiveFrame } from './views';
+
+describe('component-ready views', () => {
+  const records = generateMonth();
+
+  it('exposes one live frame without requiring component calculations', () => {
+    const frame = getLiveFrame(records, 144);
+    expect(frame).toMatchObject({ index: 144, timestamp: records[144].iso });
+    expect(frame.nodes.map((node) => node.id)).toEqual(['solar', 'home', 'ev', 'battery', 'grid']);
+    expect(frame.transfers).toEqual(records[144].transfers);
+  });
+
+  it('returns a bounded historical view and precomputed totals', () => {
+    const view = getHistoryView(records, '7d', 8_927);
+    expect(view.records).toHaveLength(2_016);
+    expect(view.range).toMatchObject({ key: '7d', startIndex: 6_912, endIndex: 8_927, canGoNext: false });
+    expect(view.totals.energyConsumedKwh).toBeGreaterThan(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run and confirm the missing-module failure**
+
+Run: `bun run test src/consumer/views.test.ts`
+
+Expected: FAIL because `views.ts` does not exist.
+
+- [ ] **Step 3: Implement the live-frame selector**
+
+`getLiveFrame(records, index, fraction = 0)` clamps the index, interpolates only instantaneous kW and battery state toward the next record, and returns a serializable object with timestamp, TOU period, day type, conditions, five node objects, active transfer records, appliance breakdown, current money/carbon interval values, and the original ledger index. Components must not need to infer signed grid direction or recompute battery percentage.
+
+- [ ] **Step 4: Implement the historical selector**
+
+`getHistoryView(records, range, anchorIndex)` uses `getTrailingWindow`, returns the exact ledger slice, range metadata (`key`, label, start/end indexes and timestamps, navigation flags), aggregate totals, and chart-ready series for solar, home, EV, battery net power, grid import, and grid export. Preserve raw numeric values; formatting belongs to future components.
+
+- [ ] **Step 5: Verify and commit the selectors**
+
+Run: `bun run test src/consumer/views.test.ts && bun run check`
+
+Expected: selector tests and all existing checks pass.
+
+```bash
+git add src/consumer/views.ts src/consumer/views.test.ts
+git commit -m "feat: expose component-ready energy views"
+```
+
+## Task 11: Export the stable data API and React hook
+
+**Files:**
+- Create: `src/consumer/useEnergySimulation.ts`
+- Create: `src/index.ts`
+- Test: `src/consumer/useEnergySimulation.test.tsx`
+- Test: `src/index.test.ts`
+
+- [ ] **Step 1: Write failing public-contract tests**
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { LOS_ANGELES_AUGUST_2026, generateMonth, getHistoryView, getLiveFrame } from './index';
+
+describe('public simulation API', () => {
+  it('exports the scenario, generator, and component selectors', () => {
+    const records = generateMonth();
+    expect(LOS_ANGELES_AUGUST_2026.id).toBe('woodland-hills-aug-2026-v1');
+    expect(getLiveFrame(records, 0).index).toBe(0);
+    expect(getHistoryView(records, '24h', 287).records).toHaveLength(288);
+  });
+});
+```
+
+- [ ] **Step 2: Run and confirm the missing-export failure**
+
+Run: `bun run test src/index.test.ts`
+
+Expected: FAIL because `src/index.ts` does not exist.
+
+- [ ] **Step 3: Create the stable framework-neutral entry point**
+
+`src/index.ts` exports all public domain types, the frozen scenario, `generateMonth`, `validateMonth`, accounting/aggregation functions, `getLiveFrame`, `getHistoryView`, range types, and playback math. Do not export internal random/profile helpers. Add a short JSDoc comment documenting units for records, live frames, transfers, and aggregate totals.
+
+- [ ] **Step 4: Add the thin React adapter**
+
+`useEnergySimulation(records)` composes `usePlayback` and the view selectors. Return `{ live, history, range, setRange, play, pause, toggle, scrubTo, jumpDay, previousPeriod, nextPeriod, isPlaying }`. Selecting a past period pauses playback; `play()` resets the history anchor to live playback. Memoize the two view objects and never mutate records.
+
+Test the hook with `renderHook` and fake animation frames: switch from 24h to 7d, navigate to a previous period, verify playback pauses, then call play and verify the anchor returns to live.
+
+- [ ] **Step 5: Verify and commit the public API**
+
+Run: `bun run test src/index.test.ts src/consumer/useEnergySimulation.test.tsx && bun run check`
+
+Expected: API/hook tests and all existing checks pass.
+
+```bash
+git add src/index.ts src/index.test.ts src/consumer/useEnergySimulation.ts src/consumer/useEnergySimulation.test.tsx
+git commit -m "feat: publish energy simulation data API"
+```
+
+## Task 12: Build a minimal simulation inspector
+
+**Files:**
+- Create: `src/inspector/SimulationInspector.tsx`
+- Test: `src/inspector/SimulationInspector.test.tsx`
+- Modify: `src/App.tsx`
+- Modify: `src/App.test.tsx`
+- Modify: `src/styles.css`
+
+- [ ] **Step 1: Write the failing inspector test**
 
 ```tsx
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { MetricCard } from './MetricCard';
-import { PlaybackControls, TimeRangeControls } from './PlaybackControls';
-
-it('exposes a metric label and formatted value', () => {
-  render(<MetricCard label="Money saved" value="$381.20" detail="Modeled energy savings" />);
-  expect(screen.getByText('Money saved')).toBeVisible();
-  expect(screen.getByText('$381.20')).toBeVisible();
-});
-
-it('supports playback and scrubbing from labeled controls', () => {
-  const toggle = vi.fn();
-  const scrub = vi.fn();
-  render(<PlaybackControls isPlaying={false} index={12} count={8_928} onToggle={toggle} onScrub={scrub} onJumpDay={vi.fn()} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Play August' }));
-  fireEvent.change(screen.getByLabelText('August playback position'), { target: { value: '144' } });
-  expect(toggle).toHaveBeenCalledOnce();
-  expect(scrub).toHaveBeenCalledWith(144);
-});
-
-it('selects and navigates trailing history windows', () => {
-  const changeRange = vi.fn();
-  const previous = vi.fn();
-  render(<TimeRangeControls range="24h" rangeLabel="Aug 30, 12:00 – Aug 31, 12:00" canGoPrevious canGoNext={false} onRangeChange={changeRange} onPreviousPeriod={previous} onNextPeriod={vi.fn()} />);
-  fireEvent.click(screen.getByRole('button', { name: 'Last week' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Previous period' }));
-  expect(changeRange).toHaveBeenCalledWith('7d');
-  expect(previous).toHaveBeenCalledOnce();
-  expect(screen.getByRole('button', { name: 'Next period' })).toBeDisabled();
-});
-```
-
-- [ ] **Step 2: Run and confirm the missing-component failure**
-
-Run: `bun run test src/components`
-
-Expected: FAIL because the components do not exist.
-
-- [ ] **Step 3: Implement the metric card and compact chart**
-
-`MetricCard` renders semantic label, value, optional unit/detail, and optional mini-chart slot. `EnergyChart` accepts `{ value, label }[]`, width, height, and accent; normalize into one accessible SVG polyline and include a `<title>`. Empty data returns an empty chart frame rather than throwing.
-
-- [ ] **Step 4: Implement playback controls**
-
-Use real `<button>` elements for previous day, play/pause, and next day, plus `<input type="range" min={0} max={count - 1}>`. Give every control an explicit accessible name. The play label alternates between `Play August` and `Pause August`.
-
-Add a `TimeRangeControls` section to the same file with segmented buttons labeled `Last 24h`, `Last week`, and `Last month`, previous/next period buttons, disabled boundary states, and a visible date-range label. Its callbacks are `onRangeChange(range)`, `onPreviousPeriod()`, and `onNextPeriod()`.
-
-- [ ] **Step 5: Verify and commit the components**
-
-Run: `bun run test src/components && bun run build`
-
-Expected: both interaction tests pass and the build succeeds.
-
-```bash
-git add src/components/MetricCard.tsx src/components/MetricCard.test.tsx src/components/EnergyChart.tsx src/components/PlaybackControls.tsx src/components/PlaybackControls.test.tsx
-git commit -m "feat: add dashboard metric controls"
-```
-
-## Task 11: Build the animated energy-flow map
-
-**Files:**
-- Create: `src/components/EnergyFlowMap.tsx`
-- Test: `src/components/EnergyFlowMap.test.tsx`
-- Modify: `src/styles.css`
-
-- [ ] **Step 1: Write the failing flow-map test**
-
-```tsx
-import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { EnergyFlowMap } from './EnergyFlowMap';
-
-it('shows active nodes and only active transfer routes', () => {
-  render(<EnergyFlowMap solarKw={4.2} homeKw={2.1} evKw={0} batterySocPercent={68} gridKw={-1.4} transfers={[{ source: 'solar', destination: 'home', kw: 2.1, kwh: 0.175 }]} />);
-  expect(screen.getByText('4.2 kW')).toBeVisible();
-  expect(screen.getByText('68%')).toBeVisible();
-  expect(screen.getByLabelText('Solar to home: 2.1 kW')).toBeVisible();
-  expect(screen.queryByLabelText(/grid to home/i)).not.toBeInTheDocument();
-});
-```
-
-- [ ] **Step 2: Run and confirm the missing-component failure**
-
-Run: `bun run test src/components/EnergyFlowMap.test.tsx`
-
-Expected: FAIL because `EnergyFlowMap.tsx` does not exist.
-
-- [ ] **Step 3: Implement the five-node map and routes**
-
-Render solar, home, EV, battery, and grid nodes over a dark atmospheric panel. Use one SVG layer with fixed viewBox coordinates and a route lookup for the eight approved source/destination pairs. Each active route contains a muted base path and an animated mint dashed path. Set `aria-label="Source to destination: N.N kW"`, `data-power`, and CSS custom property `--flow-speed` derived from power.
-
-Grid signed convention in the component is positive import and negative export. Its visible label must say `Buying` or `Sending`, never imply cash payment for exports.
-
-- [ ] **Step 4: Add purposeful reduced-motion-safe styling**
-
-In `src/styles.css`, define node cards, dotted paths, `@keyframes energy-flow`, and `[data-power]` opacity. Under `@media (prefers-reduced-motion: reduce)`, stop dash animation while preserving direction labels and active color. Keep text and controls at WCAG AA contrast.
-
-- [ ] **Step 5: Verify and commit the flow map**
-
-Run: `bun run test src/components/EnergyFlowMap.test.tsx && bun run build`
-
-Expected: the test passes and the build succeeds.
-
-```bash
-git add src/components/EnergyFlowMap.tsx src/components/EnergyFlowMap.test.tsx src/styles.css
-git commit -m "feat: visualize live energy routes"
-```
-
-## Task 12: Compose the dashboard and aggregation modes
-
-**Files:**
-- Create: `src/components/Dashboard.tsx`
-- Test: `src/components/Dashboard.test.tsx`
-- Modify: `src/App.tsx`
-- Modify: `src/styles.css`
-
-- [ ] **Step 1: Write the failing dashboard language test**
-
-```tsx
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import { Dashboard } from './Dashboard';
+import { SimulationInspector } from './SimulationInspector';
 import { generateMonth } from '../simulation/generateMonth';
 
-it('uses the approved energy and money language', () => {
-  render(<Dashboard records={generateMonth()} />);
-  expect(screen.getByText('Energy consumed')).toBeVisible();
-  expect(screen.getByText('Money saved')).toBeVisible();
-  expect(screen.getByText('Export credit earned')).toBeVisible();
-  expect(screen.getByText('CO2e avoided')).toBeVisible();
+it('inspects the public data contract and historical windows', () => {
+  render(<SimulationInspector records={generateMonth()} />);
+  expect(screen.getByText('8,928 records')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Last 24h' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Last week' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Last month' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Last week' }));
+  expect(screen.getByText('2,016 intervals')).toBeVisible();
+  expect(screen.getByText('Export credit earned')).toBeVisible();
   expect(screen.queryByText(/money made/i)).not.toBeInTheDocument();
 });
 ```
 
-- [ ] **Step 2: Run and confirm the missing-component failure**
+- [ ] **Step 2: Run and confirm the missing-inspector failure**
 
-Run: `bun run test src/components/Dashboard.test.tsx`
+Run: `bun run test src/inspector/SimulationInspector.test.tsx`
 
-Expected: FAIL because `Dashboard.tsx` does not exist.
+Expected: FAIL because the inspector does not exist.
 
-- [ ] **Step 3: Compose the live and cumulative views**
+- [ ] **Step 3: Implement the plain inspection screen**
 
-`Dashboard` generates prefix totals once with `useMemo`, uses `usePlayback`, interpolates live kW/SoC, and passes current transfers to `EnergyFlowMap`. Add the `Last 24h`, `Last week`, and `Last month` filters and previous/next period navigation. Cards aggregate the selected trailing ledger slice; the live map reflects the interval at the history anchor. Selecting the previous period pauses playback, and resuming playback returns the anchor to the current live position. Include cards for solar produced, energy consumed, money saved, export credit earned, CO2e avoided, battery charge, grid bought, and grid sent.
+Use `useEnergySimulation(records)` and semantic HTML to show the dataset/scenario ID, record count, current timestamp, playback controls, range buttons, previous/next period buttons, range label, five node values, active transfers as a table, aggregate energy/money/carbon fields, and a collapsible JSON preview of the current `live` and `history.range` objects. Keep labels exact and values unformatted enough to verify units. This is a development inspector, not the product dashboard.
 
-Use `Intl.NumberFormat('en-US')` for kWh, dollars, and kilograms. Show the date/time, `LADWP · Zone 2`, and `Modeled August 2026` so the synthetic context stays visible.
+- [ ] **Step 4: Add the generation failure boundary in App**
 
-- [ ] **Step 4: Add the generated-month failure boundary in App**
+`App` memoizes `generateMonth()` once and passes records to `SimulationInspector`. If generation throws, render `<main role="alert"><h1>Simulation data unavailable.</h1></main>`. Keep CSS to readable spacing, tables, buttons, and monospace JSON; do not create product styling, charts, or an energy-flow visualization.
 
-```tsx
-import { useMemo } from 'react';
-import { Dashboard } from './components/Dashboard';
-import { generateMonth } from './simulation/generateMonth';
+- [ ] **Step 5: Verify and commit the inspector**
 
-export function App() {
-  const result = useMemo(() => {
-    try {
-      return { records: generateMonth(), error: false } as const;
-    } catch {
-      return { records: [], error: true } as const;
-    }
-  }, []);
+Run: `bun run test src/inspector/SimulationInspector.test.tsx src/App.test.tsx && bun run check`
 
-  if (result.error) {
-    return <main className="simulation-error" role="alert"><h1>Simulation data unavailable.</h1></main>;
-  }
-
-  return <Dashboard records={result.records} />;
-}
-```
-
-- [ ] **Step 5: Implement the responsive design system**
-
-Define CSS custom properties for ink navy, paper white, mint energy, teal secondary, orange export, muted blue-gray, card radii, shadows, and spacing. At ≥1,000 px use a two-column layout with the flow map dominant and KPI rail beside it; below 1,000 px stack the map above a two-column card grid; below 640 px use one column and keep playback controls sticky. Use fluid type with `clamp()`, visible focus states, and minimum 44 px touch targets.
-
-- [ ] **Step 6: Verify and commit the composed dashboard**
-
-Run: `bun run test src/components/Dashboard.test.tsx && bun run check`
-
-Expected: dashboard copy test passes, all earlier tests pass, and the production build succeeds.
+Expected: inspector/App tests and all existing checks pass.
 
 ```bash
-git add src/App.tsx src/components/Dashboard.tsx src/components/Dashboard.test.tsx src/styles.css
-git commit -m "feat: compose energy management dashboard"
+git add src/App.tsx src/App.test.tsx src/inspector/SimulationInspector.tsx src/inspector/SimulationInspector.test.tsx src/styles.css
+git commit -m "feat: add energy simulation inspector"
 ```
 
-## Task 13: Verify the complete product behavior
+## Task 13: Verify the engine, API, and inspection workflow
 
 **Files:**
 - Modify only if a verification failure identifies a scoped defect
@@ -1015,7 +975,7 @@ Run: `bun run dev --host 127.0.0.1`
 
 Expected: Vite prints a reachable local URL. Open that URL in the in-app browser.
 
-- [ ] **Step 3: Verify the approved live story manually**
+- [ ] **Step 3: Verify the approved energy story through the inspector**
 
 At representative timestamps, confirm:
 
@@ -1028,13 +988,13 @@ At representative timestamps, confirm:
 - Cloudy and heat-wave days are visibly different from normal weekdays.
 - Import/export and battery charge/discharge never appear simultaneously.
 
-- [ ] **Step 4: Verify interaction and responsive states**
+- [ ] **Step 4: Verify component-facing navigation and exports**
 
-Pause, resume, scrub to the first and last intervals, jump backward/forward one day, and switch between Last 24h, Last week, and Last month. Navigate backward and forward by the selected period; confirm boundary buttons disable, the date range changes, and all cards recalculate consistently. Inspect at approximately 1440×900, 768×1024, and 390×844; confirm no horizontal overflow, clipped controls, unreadable text, or missing focus indication. Enable reduced motion and confirm flow direction remains understandable.
+Pause, resume, scrub to the first and last intervals, jump backward/forward one day, and switch between Last 24h, Last week, and Last month. Navigate backward and forward by the selected period; confirm boundary flags/buttons, range timestamps, ledger slices, and totals remain consistent. Import the public entry point in a focused test and confirm no component-internal or random/profile helpers leak through it. Confirm every active transfer already contains source, destination, kW, and kWh for future visual components.
 
 - [ ] **Step 5: Record final evidence and commit any scoped corrections**
 
-Capture the exact `bun run check` result and screenshots of desktop and mobile states. If no correction was required, do not create an empty commit. If a scoped correction was required:
+Capture the exact `bun run check` result and one browser screenshot of the inspector with its JSON contract open. If no correction was required, do not create an empty commit. If a scoped correction was required:
 
 ```bash
 git add src
@@ -1049,5 +1009,6 @@ Implementation is complete only when:
 - Every interval conserves energy and respects battery, solar, EV, and grid invariants.
 - Last 24h, Last week, Last month, and cumulative values derive from the ledger and support bounded past-period navigation.
 - Playback runs at one simulated day per minute and survives pause, jump, and scrub actions.
-- The interface uses `Export credit earned` and never describes LADWP NEM credit as cash income.
-- All automated checks pass and the desktop/mobile browser review covers the representative timestamps above.
+- The public API exposes typed records, live frames, transfer routes, aggregates, historical windows, and playback/navigation state without requiring component-side energy calculations.
+- The inspector uses `Export credit earned` and never describes LADWP NEM credit as cash income.
+- All automated checks pass and the browser inspector covers the representative timestamps above.
