@@ -1,4 +1,11 @@
-export const LOS_ANGELES_AUGUST_2026 = {
+const deepFreeze = <T>(value: T): T => {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value
+
+  Object.values(value).forEach(deepFreeze)
+  return Object.freeze(value)
+}
+
+export const LOS_ANGELES_AUGUST_2026 = deepFreeze({
   id: 'woodland-hills-aug-2026-v1',
   location: {
     neighborhood: 'Woodland Hills',
@@ -64,4 +71,4 @@ export const LOS_ANGELES_AUGUST_2026 = {
     kgCo2ePerKwh: 0.229,
     sourceYear: 2024,
   },
-} as const
+} as const)

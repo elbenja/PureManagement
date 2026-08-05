@@ -31,6 +31,13 @@ import {
   type Transfer,
 } from './index'
 
+const expectDeepFrozen = (value: unknown): void => {
+  if (value === null || typeof value !== 'object') return
+
+  expect(Object.isFrozen(value)).toBe(true)
+  Object.values(value).forEach(expectDeepFrozen)
+}
+
 describe('public simulation API', () => {
   it('exports the scenario, generator, validation, and component selectors', () => {
     const records = generateMonth()
@@ -56,6 +63,23 @@ describe('public simulation API', () => {
       gridImportKwh: 1,
       gridExportKwh: 0,
     }).importCost).toBe(LOS_ANGELES_AUGUST_2026.tariff.energyRatesUsdPerKwh.base)
+  })
+
+  it('publishes a recursively frozen scenario', () => {
+    expectDeepFrozen(LOS_ANGELES_AUGUST_2026)
+  })
+
+  it('cannot be mutated through a nested public property or alter generated totals', () => {
+    const before = aggregateIntervals(generateMonth())
+    const energyRates = LOS_ANGELES_AUGUST_2026.tariff.energyRatesUsdPerKwh as {
+      base: number
+    }
+
+    expect(() => {
+      energyRates.base = 99
+    }).toThrow(TypeError)
+    expect(LOS_ANGELES_AUGUST_2026.tariff.energyRatesUsdPerKwh.base).toBe(0.2654)
+    expect(aggregateIntervals(generateMonth())).toEqual(before)
   })
 
   it('keeps simulation internals out of the public runtime surface', () => {
