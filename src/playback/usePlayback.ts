@@ -8,6 +8,12 @@ const clampIndex = (index: number, count: number): number => {
   return Math.min(count - 1, Math.max(0, Math.trunc(index)))
 }
 
+const clampPosition = (position: number, count: number): number => {
+  if (count <= 0 || !Number.isFinite(position) || position < 0) return 0
+  if (position >= count) return count - 1
+  return position
+}
+
 export interface PlaybackController {
   index: number
   fraction: number
@@ -118,10 +124,7 @@ export const usePlayback = (recordCount: number): PlaybackController => {
   )
 
   const displayedPosition = historyAnchor ?? position
-  const clampedDisplayedPosition =
-    count > 0 && Number.isFinite(displayedPosition)
-      ? Math.min(count - 1, Math.max(0, displayedPosition))
-      : 0
+  const clampedDisplayedPosition = clampPosition(displayedPosition, count)
   const index = Math.floor(clampedDisplayedPosition)
   const fraction = clampedDisplayedPosition - index
 

@@ -86,6 +86,17 @@ describe('usePlayback', () => {
     expect(result.current.fraction).toBeCloseTo(0, 10)
   })
 
+  it('preserves fractional playback within the final interval', () => {
+    const { result } = renderHook(() => usePlayback(500))
+    act(() => result.current.scrubTo(499))
+
+    runNextFrame(100)
+    runNextFrame(200)
+
+    expect(result.current.index).toBe(499)
+    expect(result.current.fraction).toBeCloseTo(0.48, 10)
+  })
+
   it('clamps scrubs and day jumps instead of wrapping manual navigation', () => {
     const { result } = renderHook(() => usePlayback(500))
 
