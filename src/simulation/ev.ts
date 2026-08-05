@@ -27,8 +27,12 @@ const WEEKEND_MIN_MILES = 9
 const WEEKEND_MILES_SPREAD = 16
 const intervalHours = LOS_ANGELES_AUGUST_2026.intervalMinutes / 60
 const slotsPerDay = MINUTES_PER_DAY / LOS_ANGELES_AUGUST_2026.intervalMinutes
+// EV energy is modeled to the nearest nanokilowatt-hour; the final ledger entry carries its exact residual.
+const EV_ENERGY_PRECISION_KWH = 1e-9
 
 const isWeekday = (dayOfWeek: number) => dayOfWeek >= 1 && dayOfWeek <= 5
+
+const roundEnergy = (kwh: number) => Number(kwh.toFixed(9))
 
 const buildDailyTrips = (clock: ClockSlot[], seedId: string): DailyTrip[] => {
   const random = mulberry32(seedFromString(`${seedId}:ev`))
@@ -58,12 +62,16 @@ const buildDailyTrips = (clock: ClockSlot[], seedId: string): DailyTrip[] => {
     throw new Error('EV raw trip energy must be finite and positive')
   }
 
-  const scale = LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh / rawTotalKwh
+  const targetKwh = LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh
+  const scale = targetKwh / rawTotalKwh
+  let accumulatedTripKwh = 0
   return rawTrips.map((trip, dayIndex) => {
-    const tripKwh = trip.tripKwh * scale
+    const tripKwh =
+      dayIndex === rawTrips.length - 1 ? targetKwh - accumulatedTripKwh : roundEnergy(trip.tripKwh * scale)
     if (!Number.isFinite(tripKwh) || tripKwh <= 0 || tripKwh > LOS_ANGELES_AUGUST_2026.ev.capacityKwh) {
       throw new Error(`EV trip is infeasible on day ${dayIndex + 1}`)
     }
+    accumulatedTripKwh += tripKwh
     return { ...trip, tripKwh }
   })
 }
@@ -102,7 +110,8 @@ const validateClock = (clock: ClockSlot[]) => {
   }
 
   const canonical = buildAugustClock()
-  clock.forEach((slot, index) => {
+  for (let index = 0; index < LOS_ANGELES_AUGUST_2026.records; index += 1) {
+    const slot = clock[index]
     const expected = canonical[index]!
     if (
       !slot ||
@@ -115,6 +124,52 @@ const validateClock = (clock: ClockSlot[]) => {
     ) {
       throw new Error(`Invalid EV clock slot at index ${index}`)
     }
+  }
+}
+
+const sumEnergy = (points: EvPoint[], key: 'chargeKwh' | 'tripKwh', endExclusive = points.length) => {
+  let total = 0
+  for (let index = 0; index < endExclusive; index += 1) total += points[index]![key]
+  return total
+}
+
+const reconcileChargeLedger = (points: EvPoint[]) => {
+  let lastChargeIndex = -1
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    if (points[index]!.chargeKwh > 0) {
+      lastChargeIndex = index
+      break
+    }
+  }
+  if (lastChargeIndex < 0) throw new Error('EV charging schedule has no physical charge interval')
+
+  const reconciledChargeKwh = LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh - sumEnergy(points, 'chargeKwh', lastChargeIndex)
+  const lastCharge = points[lastChargeIndex]!
+  if (
+    !Number.isFinite(reconciledChargeKwh) ||
+    reconciledChargeKwh < 0 ||
+    reconciledChargeKwh > LOS_ANGELES_AUGUST_2026.ev.chargerKw * intervalHours
+  ) {
+    throw new Error('EV final charge ledger correction is infeasible')
+  }
+
+  lastCharge.chargeKwh = reconciledChargeKwh
+  lastCharge.chargeKw = reconciledChargeKwh / intervalHours
+}
+
+const reconcileSocLedger = (points: EvPoint[]) => {
+  const initialSocKwh = LOS_ANGELES_AUGUST_2026.ev.capacityKwh * (LOS_ANGELES_AUGUST_2026.ev.initialSocPercent / 100)
+  let chargedKwh = 0
+  let traveledKwh = 0
+
+  points.forEach((point, index) => {
+    point.socStartKwh = initialSocKwh + chargedKwh - traveledKwh
+    if (point.tripKwh > point.socStartKwh + EV_ENERGY_PRECISION_KWH) {
+      throw new Error(`EV departure cannot be served on day ${Math.floor(index / slotsPerDay) + 1}`)
+    }
+    traveledKwh += point.tripKwh
+    chargedKwh += point.chargeKwh
+    point.socEndKwh = initialSocKwh + chargedKwh - traveledKwh
   })
 }
 
@@ -183,6 +238,16 @@ export const generateEv = (clock: ClockSlot[], seedId: string): EvPoint[] => {
 
   if (Math.abs(pendingChargeKwh) > 1e-9) {
     throw new Error('EV charging schedule cannot restore monthly trip energy')
+  }
+
+  reconcileChargeLedger(points)
+  reconcileSocLedger(points)
+  if (
+    sumEnergy(points, 'tripKwh') !== LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh ||
+    sumEnergy(points, 'chargeKwh') !== LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh ||
+    points.at(-1)!.socEndKwh !== points[0]!.socStartKwh
+  ) {
+    throw new Error('EV ledger does not reconcile exactly')
   }
 
   validatePoints(points)

@@ -26,8 +26,8 @@ describe('generateEv', () => {
   it('normalizes driving and charging to the scenario target with consistent interval units', () => {
     const points = generateEv(buildAugustClock(), LOS_ANGELES_AUGUST_2026.seedId)
 
-    expect(monthlyTotal(points.map((point) => point.tripKwh))).toBeCloseTo(LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh, 10)
-    expect(monthlyTotal(points.map((point) => point.chargeKwh))).toBeCloseTo(LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh, 10)
+    expect(monthlyTotal(points.map((point) => point.tripKwh))).toBe(LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh)
+    expect(monthlyTotal(points.map((point) => point.chargeKwh))).toBe(LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh)
     points.forEach((point) => {
       expect([point.chargeKw, point.chargeKwh, point.socStartKwh, point.socEndKwh, point.tripKwh].every(Number.isFinite)).toBe(true)
       expect(point.chargeKw).toBeGreaterThanOrEqual(0)
@@ -56,7 +56,7 @@ describe('generateEv', () => {
       if (!point.available) expect(point.chargeKwh).toBe(0)
       expect(point.tripKwh === 0 || point.chargeKwh === 0).toBe(true)
     })
-    expect(points.at(-1)!.socEndKwh).toBeCloseTo(points[0]!.socStartKwh, 10)
+    expect(points.at(-1)!.socEndKwh).toBe(points[0]!.socStartKwh)
   })
 
   it('uses weekday commute departures and reliable at-home evening charging', () => {
@@ -113,10 +113,10 @@ describe('generateEv', () => {
     )
   })
 
-  it('rejects an absent clock slot with the offending index', () => {
+  it.each([5, 288])('rejects a sparse clock hole at index %i', (index) => {
     const malformed = buildAugustClock()
-    malformed[5] = undefined as unknown as (typeof malformed)[number]
+    delete malformed[index]
 
-    expect(() => generateEv(malformed, LOS_ANGELES_AUGUST_2026.seedId)).toThrow('Invalid EV clock slot at index 5')
+    expect(() => generateEv(malformed, LOS_ANGELES_AUGUST_2026.seedId)).toThrow(`Invalid EV clock slot at index ${index}`)
   })
 })
