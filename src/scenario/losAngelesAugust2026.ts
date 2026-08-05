@@ -1,0 +1,61 @@
+export const LOS_ANGELES_AUGUST_2026 = {
+  id: 'woodland-hills-aug-2026-v1',
+  location: {
+    neighborhood: 'Woodland Hills',
+    city: 'Los Angeles',
+    utilityZone: 'LADWP Zone 2',
+    latitude: 34.1683,
+    longitude: -118.6059,
+    timezone: 'America/Los_Angeles',
+    utcOffset: '-07:00',
+  },
+  intervalMinutes: 5,
+  records: 8_928,
+  seedId: 'woodland-hills-aug-2026-v1',
+  solar: {
+    capacityKw: 8,
+    targetAugustKwh: 1_414.65,
+    annualReferenceKwh: 13_581.49,
+    tiltDegrees: 20,
+    azimuthDegrees: 180,
+    lossesPercent: 14,
+    equipment: 'premium',
+    roof: 'fixed',
+  },
+  home: {
+    residents: 4,
+    squareFeet: 2_200,
+    targetAugustKwh: 1_825,
+  },
+  ev: {
+    capacityKwh: 75,
+    chargerKw: 7.2,
+    weekdayMiles: {
+      min: 30,
+      max: 40,
+    },
+    targetAugustKwh: 340,
+    initialSocPercent: 80,
+  },
+  battery: {
+    capacityKwh: 13.5,
+    maxPowerKw: 5,
+    roundTripEfficiency: 0.9,
+    reservePercent: 15,
+    initialPercent: 50,
+  },
+  tariff: {
+    plan: 'R-1B',
+    importRates: {
+      base: 0.2654,
+      low: 0.29284,
+      high: 0.35124,
+    },
+    serviceCharge: 12,
+    exportCredit: 'banked-bill-credit',
+  },
+  emissions: {
+    kgCo2ePerKwh: 0.229,
+    sourceYear: 2024,
+  },
+} as const
