@@ -151,6 +151,10 @@ describe('getTrailingWindow', () => {
     expect(() => getTrailingWindow('month' as '24h', 0, 5)).toThrow(/invalid range/i)
   })
 
+  it.each(['toString', 'constructor', '__proto__'])('rejects prototype range key %s', (range) => {
+    expect(() => getTrailingWindow(range as '24h', 0, 5)).toThrow(/invalid range/i)
+  })
+
   it.each([-1, 1.5, 5])('rejects invalid anchor index %s', (anchorIndex) => {
     expect(() => getTrailingWindow('24h', anchorIndex, 5)).toThrow(/invalid anchorIndex/i)
   })

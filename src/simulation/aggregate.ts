@@ -27,6 +27,9 @@ export const rangeSlots = {
   '31d': LOS_ANGELES_AUGUST_2026.records,
 } as const
 
+const isTimeRange = (value: unknown): value is TimeRange =>
+  value === '24h' || value === '7d' || value === '31d'
+
 const zeroTotals = (): EnergyTotals => ({
   solarKwh: 0,
   homeKwh: 0,
@@ -111,7 +114,7 @@ export const getTrailingWindow = (
   anchorIndex: number,
   recordCount: number,
 ) => {
-  if (!(range in rangeSlots)) throw new Error('Invalid range')
+  if (!isTimeRange(range)) throw new Error('Invalid range')
   if (!Number.isInteger(recordCount) || recordCount <= 0) {
     throw new Error('Invalid recordCount')
   }
