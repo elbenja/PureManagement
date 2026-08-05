@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 import { buildAugustClock, classifyTou } from './time'
 
 describe('buildAugustClock', () => {
@@ -6,6 +7,7 @@ describe('buildAugustClock', () => {
     const clock = buildAugustClock()
 
     expect(clock).toHaveLength(8_928)
+    expect(clock).toHaveLength(LOS_ANGELES_AUGUST_2026.records)
     expect(new Set(clock.map((slot) => slot.iso)).size).toBe(clock.length)
     expect(clock[0]?.iso).toBe('2026-08-01T00:00:00.000-07:00')
     expect(clock.at(-1)?.iso).toBe('2026-08-31T23:55:00.000-07:00')
@@ -19,6 +21,22 @@ describe('buildAugustClock', () => {
     expect(lastSlotOnFirstDay).toMatchObject({ day: 1, minuteOfDay: 1_435 })
     expect(firstSlotOnSecondDay).toMatchObject({ day: 2, minuteOfDay: 0 })
     expect(firstSlotOnSecondDay?.dayOfWeek).toBe(0)
+  })
+})
+
+describe('LOS_ANGELES_AUGUST_2026 tariff', () => {
+  it('uses unit-bearing rate, charge, and export policy fields', () => {
+    expect(LOS_ANGELES_AUGUST_2026.tariff).toMatchObject({
+      plan: 'R-1B',
+      currency: 'USD',
+      energyRatesUsdPerKwh: {
+        base: 0.2654,
+        low: 0.29284,
+        high: 0.35124,
+      },
+      serviceChargeUsdPerMonth: 12,
+      exportCreditPolicy: 'banked-bill-credit',
+    })
   })
 })
 

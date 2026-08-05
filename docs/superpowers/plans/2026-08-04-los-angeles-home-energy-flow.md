@@ -615,7 +615,7 @@ Expected: FAIL because `accounting.ts` does not exist.
 
 ```ts
 export function accountInterval(input: AccountingInput): AccountingResult {
-  const importRate = LOS_ANGELES_AUGUST_2026.tariff.rates[input.tou];
+  const importRate = LOS_ANGELES_AUGUST_2026.tariff.energyRatesUsdPerKwh[input.tou];
   const exportRate = importRate;
   const importCost = input.gridImportKwh * importRate;
   const exportCredit = input.gridExportKwh * exportRate;

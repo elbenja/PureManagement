@@ -46,13 +46,14 @@ export const LOS_ANGELES_AUGUST_2026 = {
   },
   tariff: {
     plan: 'R-1B',
-    importRates: {
+    currency: 'USD',
+    energyRatesUsdPerKwh: {
       base: 0.2654,
       low: 0.29284,
       high: 0.35124,
     },
-    serviceCharge: 12,
-    exportCredit: 'banked-bill-credit',
+    serviceChargeUsdPerMonth: 12,
+    exportCreditPolicy: 'banked-bill-credit',
   },
   emissions: {
     kgCo2ePerKwh: 0.229,
