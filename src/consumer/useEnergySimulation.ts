@@ -1,0 +1,112 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { EnergyInterval } from '../domain/energy'
+import { usePlayback } from '../playback/usePlayback'
+import { rangeSlots, type TimeRange } from '../simulation/aggregate'
+import {
+  getHistoryView,
+  getLiveFrame,
+  type HistoryView,
+  type LiveFrame,
+} from './views'
+
+export interface EnergySimulationController {
+  live: LiveFrame | null
+  history: HistoryView | null
+  range: TimeRange
+  setRange: (range: TimeRange) => void
+  play: () => void
+  pause: () => void
+  toggle: () => void
+  scrubTo: (index: number) => void
+  jumpDay: (delta: number) => void
+  previousPeriod: () => void
+  nextPeriod: () => void
+  isPlaying: boolean
+}
+
+export const useEnergySimulation = (
+  records: readonly EnergyInterval[],
+): EnergySimulationController => {
+  const playback = usePlayback(records.length)
+  const [range, setRangeState] = useState<TimeRange>('24h')
+  const [historyAnchor, setHistoryAnchor] = useState<number | null>(null)
+  const retainedLiveIndex = useRef(0)
+
+  useEffect(() => {
+    if (historyAnchor === null) retainedLiveIndex.current = playback.index
+  }, [historyAnchor, playback.index])
+
+  const live = useMemo(
+    () => getLiveFrame(records, playback.index, playback.fraction),
+    [records, playback.index, playback.fraction],
+  )
+  const history = useMemo(
+    () => getHistoryView(records, range, playback.index),
+    [records, range, playback.index],
+  )
+
+  const setRange = useCallback((nextRange: TimeRange) => {
+    if (records.length > 0) setRangeState(nextRange)
+  }, [records.length])
+
+  const play = useCallback(() => {
+    if (records.length === 0) return
+    setHistoryAnchor(null)
+    playback.play()
+  }, [playback.play, records.length])
+
+  const pause = useCallback(() => {
+    if (records.length > 0) playback.pause()
+  }, [playback.pause, records.length])
+
+  const toggle = useCallback(() => {
+    if (records.length === 0) return
+    if (playback.isPlaying) playback.pause()
+    else {
+      setHistoryAnchor(null)
+      playback.play()
+    }
+  }, [playback.isPlaying, playback.pause, playback.play, records.length])
+
+  const scrubTo = useCallback((index: number) => {
+    if (records.length === 0) return
+    setHistoryAnchor(null)
+    playback.scrubTo(index)
+  }, [playback.scrubTo, records.length])
+
+  const jumpDay = useCallback((delta: number) => {
+    if (records.length === 0) return
+    setHistoryAnchor(null)
+    playback.jumpDay(delta)
+  }, [playback.jumpDay, records.length])
+
+  const previousPeriod = useCallback(() => {
+    if (!history?.range.canGoPrevious) return
+    const anchor = playback.index - rangeSlots[range]
+    setHistoryAnchor(anchor)
+    playback.setHistoryAnchor(anchor)
+  }, [history, playback.index, playback.setHistoryAnchor, range])
+
+  const nextPeriod = useCallback(() => {
+    if (!history?.range.canGoNext) return
+    const anchor = playback.index + rangeSlots[range]
+    if (anchor > retainedLiveIndex.current) return
+    setHistoryAnchor(anchor)
+    playback.setHistoryAnchor(anchor)
+  }, [history, playback.index, playback.setHistoryAnchor, range])
+
+  return {
+    live,
+    history,
+    range,
+    setRange,
+    play,
+    pause,
+    toggle,
+    scrubTo,
+    jumpDay,
+    previousPeriod,
+    nextPeriod,
+    isPlaying: playback.isPlaying,
+  }
+}
