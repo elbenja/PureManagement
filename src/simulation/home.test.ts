@@ -32,6 +32,21 @@ const energyFor = (
     0,
   )
 
+const lagOneCorrelation = (values: number[]) => {
+  const left = values.slice(0, -1)
+  const right = values.slice(1)
+  const mean = (values: number[]) => values.reduce((total, value) => total + value, 0) / values.length
+  const leftMean = mean(left)
+  const rightMean = mean(right)
+  const numerator = left.reduce((total, value, index) => total + (value - leftMean) * (right[index]! - rightMean), 0)
+  const denominator = Math.sqrt(
+    left.reduce((total, value) => total + (value - leftMean) ** 2, 0) *
+      right.reduce((total, value) => total + (value - rightMean) ** 2, 0),
+  )
+
+  return numerator / denominator
+}
+
 describe('generateHomeLoad', () => {
   it('generates a deterministic complete August household profile', () => {
     const clock = buildAugustClock()
@@ -97,13 +112,44 @@ describe('generateHomeLoad', () => {
     expect(new Set(noonLoads.map((kw) => kw.toFixed(3))).size).toBeGreaterThan(10)
     expect(new Set(points.slice(0, 288).map((point) => point.kw.toFixed(3))).size).toBeGreaterThan(20)
     expect(Math.max(...points.map((point) => point.kw))).toBeLessThanOrEqual(15)
+    expect(
+      Math.max(...points.slice(1).map((point, index) => Math.abs(point.kw - points[index]!.kw))),
+    ).toBeLessThan(Math.max(...points.map((point) => point.kw)) * 0.2)
+    expect(lagOneCorrelation(points.map((point) => point.kw))).toBeGreaterThan(0.99)
+    const activeMinuteByCategory: Record<LoadCategory, number> = {
+      hvac: 16 * 60,
+      waterHeating: 7 * 60,
+      cooking: 7 * 60,
+      laundry: 21 * 60,
+      refrigeration: 3 * 60,
+      lighting: 20 * 60,
+      electronicsOther: 20 * 60,
+    }
+    categories.forEach((category) => {
+      const dailyCategoryLoads = clock.flatMap((slot, index) =>
+        slot.minuteOfDay === activeMinuteByCategory[category]
+          ? [points[index]!.breakdownKwh[category]]
+          : [],
+      )
+      expect(new Set(dailyCategoryLoads.map((kwh) => kwh.toFixed(9))).size).toBeGreaterThan(10)
+    })
   })
 
-  it('rejects mismatched or invalid weather inputs with indexed errors', () => {
+  it('rejects non-canonical clocks, invalid clock fields, and invalid conditions', () => {
     const clock = buildAugustClock()
     const conditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId)
 
-    expect(() => generateHomeLoad(clock, conditions.slice(1))).toThrow('Home input length mismatch')
+    expect(() => generateHomeLoad([], [])).toThrow('Home input must contain 8928 records')
+    expect(() => generateHomeLoad(clock.slice(0, 1), conditions.slice(0, 1))).toThrow(
+      'Home input must contain 8928 records',
+    )
+    expect(() => generateHomeLoad(clock, conditions.slice(1))).toThrow('Home input must contain 8928 records')
+    expect(() =>
+      generateHomeLoad(
+        clock.map((slot, index) => (index === 41 ? { ...slot, minuteOfDay: Number.NaN } : slot)),
+        conditions,
+      ),
+    ).toThrow('Invalid clock minute at index 41')
     expect(() =>
       generateHomeLoad(
         clock,
@@ -120,5 +166,13 @@ describe('generateHomeLoad', () => {
         ),
       ),
     ).toThrow('Invalid cloud factor at index 43')
+    expect(() =>
+      generateHomeLoad(
+        clock,
+        conditions.map((condition, index) =>
+          index === 44 ? { ...condition, occupied: 'yes' as unknown as boolean } : condition,
+        ),
+      ),
+    ).toThrow('Invalid occupied flag at index 44')
   })
 })
