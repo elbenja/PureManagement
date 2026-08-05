@@ -82,11 +82,16 @@ describe('useEnergySimulation', () => {
   it('moves next by one full range without crossing the retained live position', () => {
     const { result } = renderHook(() => useEnergySimulation(records))
     act(() => result.current.scrubTo(1_000))
+
+    expect(result.current.history?.range.canGoNext).toBe(false)
+
     act(() => result.current.previousPeriod())
+    expect(result.current.history?.range.canGoNext).toBe(true)
 
     act(() => result.current.nextPeriod())
     expect(result.current.live?.index).toBe(1_000)
     expect(result.current.isPlaying).toBe(false)
+    expect(result.current.history?.range.canGoNext).toBe(false)
 
     const historyAtLive = result.current.history
     act(() => result.current.nextPeriod())

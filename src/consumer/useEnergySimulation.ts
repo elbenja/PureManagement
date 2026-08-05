@@ -40,10 +40,26 @@ export const useEnergySimulation = (
     () => getLiveFrame(records, playback.index, playback.fraction),
     [records, playback.index, playback.fraction],
   )
-  const history = useMemo(
+  const selectedHistory = useMemo(
     () => getHistoryView(records, range, playback.index),
     [records, range, playback.index],
   )
+  const history = useMemo(() => {
+    if (selectedHistory === null) return null
+
+    const nextAnchor = playback.index + rangeSlots[range]
+    const canGoNext = selectedHistory.range.canGoNext &&
+      historyAnchor !== null &&
+      nextAnchor <= retainedLiveIndex.current
+
+    return {
+      ...selectedHistory,
+      range: {
+        ...selectedHistory.range,
+        canGoNext,
+      },
+    }
+  }, [historyAnchor, playback.index, range, selectedHistory])
 
   const setRange = useCallback((nextRange: TimeRange) => {
     if (records.length > 0) setRangeState(nextRange)
@@ -90,7 +106,6 @@ export const useEnergySimulation = (
   const nextPeriod = useCallback(() => {
     if (!history?.range.canGoNext) return
     const anchor = playback.index + rangeSlots[range]
-    if (anchor > retainedLiveIndex.current) return
     setHistoryAnchor(anchor)
     playback.setHistoryAnchor(anchor)
   }, [history, playback.index, playback.setHistoryAnchor, range])
