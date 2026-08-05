@@ -17,8 +17,12 @@ describe('August conditions and solar generation', () => {
     const clock = buildAugustClock()
     const firstConditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId)
     const secondConditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId)
+    const distinctSeedConditions = buildConditions(clock, 'woodland-hills-aug-2026-v2')
+    const repeatedDistinctSeedConditions = buildConditions(clock, 'woodland-hills-aug-2026-v2')
 
     expect(secondConditions).toEqual(firstConditions)
+    expect(repeatedDistinctSeedConditions).toEqual(distinctSeedConditions)
+    expect(distinctSeedConditions).not.toEqual(firstConditions)
     expect(generateSolar(clock, secondConditions)).toEqual(generateSolar(clock, firstConditions))
   })
 
@@ -60,6 +64,26 @@ describe('August conditions and solar generation', () => {
     }))
 
     expect(() => generateSolar(clock, conditions)).toThrow('Solar target unreachable')
+  })
+
+  it('rejects solar inputs with mismatched clock and condition lengths', () => {
+    const clock = buildAugustClock()
+    const conditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId)
+
+    expect(() => generateSolar(clock, conditions.slice(1))).toThrow('Solar input length mismatch')
+    expect(() => generateSolar(clock, [...conditions, conditions[0]!])).toThrow(
+      'Solar input length mismatch',
+    )
+  })
+
+  it.each([Number.NaN, -0.01, 1.01])('rejects invalid cloud factor %s', (cloudFactor) => {
+    const clock = buildAugustClock()
+    const conditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId)
+    const invalidConditions = conditions.map((condition, index) =>
+      index === 42 ? { ...condition, cloudFactor } : condition,
+    )
+
+    expect(() => generateSolar(clock, invalidConditions)).toThrow('Invalid cloud factor at index 42')
   })
 
   it('sets the required day types and correlated cloud profiles', () => {

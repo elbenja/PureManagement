@@ -61,6 +61,20 @@ const scaleForTarget = (rawKw: number[]): number => {
 }
 
 export const generateSolar = (clock: ClockSlot[], conditions: Condition[]): SolarPoint[] => {
+  if (clock.length !== conditions.length) {
+    throw new Error('Solar input length mismatch')
+  }
+
+  conditions.forEach((condition, index) => {
+    if (
+      !Number.isFinite(condition.cloudFactor) ||
+      condition.cloudFactor < 0 ||
+      condition.cloudFactor > 1
+    ) {
+      throw new Error(`Invalid cloud factor at index ${index}`)
+    }
+  })
+
   const rawKw = clock.map((slot, index) => rawSolarKw(slot, conditions[index]!))
   const scale = scaleForTarget(rawKw)
 
