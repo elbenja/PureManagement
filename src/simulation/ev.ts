@@ -18,13 +18,18 @@ interface DailyTrip {
   tripKwh: number
 }
 
+interface RawDailyTrip {
+  departureMinute: number
+  returnMinute: number
+  minMiles: number
+  maxMiles: number
+  rawMiles: number
+}
+
 const MINUTES_PER_DAY = 24 * 60
 const WEEKDAY_DEPARTURE_MINUTE = 7 * 60 + 30
 const WEEKDAY_RETURN_MINUTE = 18 * 60
 const PREFERRED_CHARGING_MINUTE = 20 * 60
-const EV_EFFICIENCY_KWH_PER_MILE = 0.32
-const WEEKEND_MIN_MILES = 9
-const WEEKEND_MILES_SPREAD = 16
 const intervalHours = LOS_ANGELES_AUGUST_2026.intervalMinutes / 60
 const slotsPerDay = MINUTES_PER_DAY / LOS_ANGELES_AUGUST_2026.intervalMinutes
 // EV energy is modeled to the nearest nanokilowatt-hour; the final ledger entry carries its exact residual.
@@ -36,39 +41,66 @@ const roundEnergy = (kwh: number) => Number(kwh.toFixed(9))
 
 const buildDailyTrips = (clock: ClockSlot[], seedId: string): DailyTrip[] => {
   const random = mulberry32(seedFromString(`${seedId}:ev`))
-  const rawTrips = Array.from({ length: 31 }, (_, dayIndex) => {
+  const rawTrips: RawDailyTrip[] = Array.from({ length: 31 }, (_, dayIndex) => {
     const dayStart = dayIndex * slotsPerDay
     const dayOfWeek = clock[dayStart]!.dayOfWeek
+    const milesRange = isWeekday(dayOfWeek)
+      ? LOS_ANGELES_AUGUST_2026.ev.weekdayMiles
+      : LOS_ANGELES_AUGUST_2026.ev.weekendMiles
+    const rawMiles = milesRange.min + random() * (milesRange.max - milesRange.min)
 
     if (isWeekday(dayOfWeek)) {
-      const miles =
-        LOS_ANGELES_AUGUST_2026.ev.weekdayMiles.min +
-        random() * (LOS_ANGELES_AUGUST_2026.ev.weekdayMiles.max - LOS_ANGELES_AUGUST_2026.ev.weekdayMiles.min)
       return {
         departureMinute: WEEKDAY_DEPARTURE_MINUTE,
         returnMinute: WEEKDAY_RETURN_MINUTE,
-        tripKwh: miles * EV_EFFICIENCY_KWH_PER_MILE,
+        minMiles: milesRange.min,
+        maxMiles: milesRange.max,
+        rawMiles,
       }
     }
 
-    const miles = WEEKEND_MIN_MILES + random() * WEEKEND_MILES_SPREAD
     const departureMinute = (9 * 60 + 30) + Math.floor(random() * 4) * 30
     const returnMinute = departureMinute + (3 * 60 + 30) + Math.floor(random() * 5) * 30
-    return { departureMinute, returnMinute, tripKwh: miles * EV_EFFICIENCY_KWH_PER_MILE }
+    return { departureMinute, returnMinute, minMiles: milesRange.min, maxMiles: milesRange.max, rawMiles }
   })
-  const rawTotalKwh = rawTrips.reduce((total, trip) => total + trip.tripKwh, 0)
 
-  if (!Number.isFinite(rawTotalKwh) || rawTotalKwh <= 0) {
-    throw new Error('EV raw trip energy must be finite and positive')
+  const targetMiles = LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh / LOS_ANGELES_AUGUST_2026.ev.efficiencyKwhPerMile
+  const minimumMiles = rawTrips.reduce((total, trip) => total + trip.minMiles, 0)
+  const maximumMiles = rawTrips.reduce((total, trip) => total + trip.maxMiles, 0)
+  if (targetMiles < minimumMiles || targetMiles > maximumMiles) {
+    throw new Error('EV mileage allocation target is outside aggregate feasible bounds')
   }
 
+  const rawMiles = rawTrips.reduce((total, trip) => total + trip.rawMiles, 0)
+  const milesAdjustment = targetMiles - rawMiles
+  const adjustmentCapacity = rawTrips.reduce(
+    (total, trip) => total + (milesAdjustment >= 0 ? trip.maxMiles - trip.rawMiles : trip.rawMiles - trip.minMiles),
+    0,
+  )
+  if (Math.abs(milesAdjustment) > adjustmentCapacity + EV_ENERGY_PRECISION_KWH) {
+    throw new Error('EV mileage allocation target cannot be reached within daily bounds')
+  }
+
+  const allocatedMiles = rawTrips.map((trip) => {
+    if (milesAdjustment === 0) return trip.rawMiles
+    const headroom = milesAdjustment >= 0 ? trip.maxMiles - trip.rawMiles : trip.rawMiles - trip.minMiles
+    return trip.rawMiles + (milesAdjustment * headroom) / adjustmentCapacity
+  })
   const targetKwh = LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh
-  const scale = targetKwh / rawTotalKwh
   let accumulatedTripKwh = 0
   return rawTrips.map((trip, dayIndex) => {
     const tripKwh =
-      dayIndex === rawTrips.length - 1 ? targetKwh - accumulatedTripKwh : roundEnergy(trip.tripKwh * scale)
-    if (!Number.isFinite(tripKwh) || tripKwh <= 0 || tripKwh > LOS_ANGELES_AUGUST_2026.ev.capacityKwh) {
+      dayIndex === rawTrips.length - 1
+        ? targetKwh - accumulatedTripKwh
+        : roundEnergy(allocatedMiles[dayIndex]! * LOS_ANGELES_AUGUST_2026.ev.efficiencyKwhPerMile)
+    const impliedMiles = tripKwh / LOS_ANGELES_AUGUST_2026.ev.efficiencyKwhPerMile
+    if (
+      !Number.isFinite(tripKwh) ||
+      tripKwh <= 0 ||
+      tripKwh > LOS_ANGELES_AUGUST_2026.ev.capacityKwh ||
+      impliedMiles < trip.minMiles ||
+      impliedMiles > trip.maxMiles
+    ) {
       throw new Error(`EV trip is infeasible on day ${dayIndex + 1}`)
     }
     accumulatedTripKwh += tripKwh

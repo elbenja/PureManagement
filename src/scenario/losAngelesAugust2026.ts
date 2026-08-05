@@ -34,6 +34,11 @@ export const LOS_ANGELES_AUGUST_2026 = {
       min: 30,
       max: 40,
     },
+    weekendMiles: {
+      min: 9,
+      max: 25,
+    },
+    efficiencyKwhPerMile: 0.38,
     targetAugustKwh: 340,
     initialSocPercent: 80,
   },

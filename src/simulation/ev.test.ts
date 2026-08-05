@@ -8,6 +8,31 @@ const departureMinute = 7 * 60 + 30
 
 const monthlyTotal = (values: number[]) => values.reduce((total, value) => total + value, 0)
 
+const assertConstrainedProfile = (seedId: string) => {
+  const clock = buildAugustClock()
+  const points = generateEv(clock, seedId)
+
+  expect(monthlyTotal(points.map((point) => point.tripKwh))).toBe(LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh)
+  expect(monthlyTotal(points.map((point) => point.chargeKwh))).toBe(LOS_ANGELES_AUGUST_2026.ev.targetAugustKwh)
+  expect(points.at(-1)!.socEndKwh).toBe(points[0]!.socStartKwh)
+
+  points.forEach((point, index) => {
+    if (index > 0) expect(point.socStartKwh).toBe(points[index - 1]!.socEndKwh)
+    expect(point.chargeKw).toBeLessThanOrEqual(LOS_ANGELES_AUGUST_2026.ev.chargerKw)
+    if (!point.available) expect(point.chargeKwh).toBe(0)
+    expect(point.tripKwh === 0 || point.chargeKwh === 0).toBe(true)
+    if (point.tripKwh > 0) {
+      expect(point.socStartKwh).toBeGreaterThanOrEqual(point.tripKwh)
+      const miles = point.tripKwh / LOS_ANGELES_AUGUST_2026.ev.efficiencyKwhPerMile
+      const milesRange = clock[index]!.dayOfWeek >= 1 && clock[index]!.dayOfWeek <= 5
+        ? LOS_ANGELES_AUGUST_2026.ev.weekdayMiles
+        : LOS_ANGELES_AUGUST_2026.ev.weekendMiles
+      expect(miles).toBeGreaterThanOrEqual(milesRange.min)
+      expect(miles).toBeLessThanOrEqual(milesRange.max)
+    }
+  })
+}
+
 describe('generateEv', () => {
   it('generates a deterministic, seed-varying August driving and charging profile', () => {
     const clock = buildAugustClock()
@@ -37,6 +62,17 @@ describe('generateEv', () => {
       expect(point.chargeKwh).toBeCloseTo(point.chargeKw * intervalHours, 12)
     })
   })
+
+  it('keeps every canonical trip within the configured weekday or weekend mileage bound', () => {
+    assertConstrainedProfile(LOS_ANGELES_AUGUST_2026.seedId)
+  })
+
+  it.each(['driver-alpha', 'driver-bravo', 'driver-charlie', 'driver-delta', 'driver-echo'])(
+    'keeps the exact EV ledger and physical constraints for alternate seed %s',
+    (seedId) => {
+      assertConstrainedProfile(seedId)
+    },
+  )
 
   it('keeps a feasible chronological vehicle state and never charges while away', () => {
     const clock = buildAugustClock()
