@@ -238,6 +238,22 @@ describe('routeInterval', () => {
     expect(result.transfers.some((transfer) => transfer.source === 'grid' || transfer.destination === 'grid')).toBe(false)
   })
 
+  it('retains small material grid demand below the invariant tolerance', () => {
+    const input = {
+      solarKwh: 0,
+      homeKwh: 2.5e-11,
+      evKwh: 1e-10,
+      batterySocKwh: reserveKwh,
+      minuteOfDay: 12 * 60,
+    }
+    const result = expectConserved(input)
+
+    expect(result.gridImportKwh).toBeCloseTo(input.homeKwh + input.evKwh, 15)
+    expect(transferKwh(result.transfers, 'grid', 'home')).toBeCloseTo(input.homeKwh, 15)
+    expect(transferKwh(result.transfers, 'grid', 'ev')).toBeCloseTo(input.evKwh, 15)
+    expect(result.transfers).toHaveLength(2)
+  })
+
   it.each([
     { solarKwh: 1, homeKwh: 0.2, evKwh: 0, batterySocKwh: 10, minuteOfDay: 12 * 60 },
     { solarKwh: 0.1, homeKwh: 1, evKwh: 0.25, batterySocKwh: 3, minuteOfDay: 18 * 60 },

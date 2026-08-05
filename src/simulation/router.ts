@@ -31,13 +31,16 @@ const reserveKwh = scenario.battery.capacityKwh * (scenario.battery.reservePerce
 const maxAcKwhPerInterval = scenario.battery.maxPowerKw * intervalHours
 const dispatchStartMinute = 13 * 60
 const dispatchEndMinute = 20 * 60
-const tolerance = 1e-10
+const invariantTolerance = 1e-10
+const maximumTransferCount = 8
+const routingEpsilon = invariantTolerance / 100
+const maximumOmittedRouteKwh = maximumTransferCount * routingEpsilon
 
 type LoadAllocation = { homeKwh: number; evKwh: number; remainingKwh: number }
 
-const nonNegative = (value: number) => (value <= tolerance ? 0 : value)
+const nonNegative = (value: number) => (value <= routingEpsilon ? 0 : value)
 
-const closeEnough = (left: number, right: number) => Math.abs(left - right) <= tolerance
+const closeEnough = (left: number, right: number) => Math.abs(left - right) <= invariantTolerance
 
 const transferTotal = (
   transfers: Transfer[],
@@ -62,7 +65,7 @@ const addTransfer = (
   destination: EnergyNode,
   kwh: number,
 ) => {
-  if (kwh <= tolerance) return
+  if (kwh <= routingEpsilon) return
 
   transfers.push({
     source,
@@ -138,15 +141,15 @@ const verifyResult = (input: RouterInput, result: RouterResult) => {
     throw new Error('Router invariant failed: non-negative finite result required')
   }
   if (
-    result.batterySocEndKwh < reserveKwh - tolerance ||
-    result.batterySocEndKwh > scenario.battery.capacityKwh + tolerance
+    result.batterySocEndKwh < reserveKwh - invariantTolerance ||
+    result.batterySocEndKwh > scenario.battery.capacityKwh + invariantTolerance
   ) {
     throw new Error('Router invariant failed: battery state out of bounds')
   }
-  if (result.batteryChargeKwh > tolerance && result.batteryDischargeKwh > tolerance) {
+  if (result.batteryChargeKwh > invariantTolerance && result.batteryDischargeKwh > invariantTolerance) {
     throw new Error('Router invariant failed: simultaneous battery charge and discharge')
   }
-  if (result.gridImportKwh > tolerance && result.gridExportKwh > tolerance) {
+  if (result.gridImportKwh > invariantTolerance && result.gridExportKwh > invariantTolerance) {
     throw new Error('Router invariant failed: simultaneous grid import and export')
   }
 
@@ -207,13 +210,13 @@ const verifyResult = (input: RouterInput, result: RouterResult) => {
 
   if (
     transferTotal(result.transfers, (transfer) => transfer.source === 'battery') / intervalHours >
-      scenario.battery.maxPowerKw + tolerance ||
+      scenario.battery.maxPowerKw + invariantTolerance ||
     transferTotal(
       result.transfers,
       (transfer) => transfer.source === 'solar' && transfer.destination === 'battery',
     ) /
       intervalHours >
-      scenario.battery.maxPowerKw + tolerance
+      scenario.battery.maxPowerKw + invariantTolerance
   ) {
     throw new Error('Router invariant failed: battery AC power limit exceeded')
   }
@@ -221,6 +224,10 @@ const verifyResult = (input: RouterInput, result: RouterResult) => {
 
 export const routeInterval = (input: RouterInput): RouterResult => {
   validateInput(input)
+
+  if (maximumOmittedRouteKwh >= invariantTolerance) {
+    throw new Error('Router invariant failed: routing epsilon exceeds reconciliation tolerance')
+  }
 
   const transfers: Transfer[] = []
   const solarAllocation = allocateLoad(input.solarKwh, input.homeKwh, input.evKwh)
