@@ -108,6 +108,37 @@ describe('aggregateIntervals', () => {
     expect(buildPrefixTotals([])[0]).toEqual(aggregateIntervals([]))
   })
 
+  it('rejects sparse records at their missing index', () => {
+    const sparseRecords = new Array<EnergyInterval>(2)
+
+    expect(() => aggregateIntervals(sparseRecords)).toThrow(/record 0.*invalid/i)
+    expect(() => buildPrefixTotals(sparseRecords)).toThrow(/record 0.*invalid/i)
+  })
+
+  it.each([
+    ['aggregateIntervals', aggregateIntervals],
+    ['buildPrefixTotals', buildPrefixTotals],
+  ])('rejects %s totals that overflow within a single record', (_name, aggregate) => {
+    const overflowingRecord = interval({
+      homeKwh: Number.MAX_VALUE,
+      evKwh: Number.MAX_VALUE,
+    })
+
+    expect(() => aggregate([overflowingRecord])).toThrow(/record 0.*overflow/i)
+  })
+
+  it.each([
+    ['aggregateIntervals', aggregateIntervals],
+    ['buildPrefixTotals', buildPrefixTotals],
+  ])('rejects %s totals that overflow across records', (_name, aggregate) => {
+    const records = [
+      interval({ solarKwh: Number.MAX_VALUE }),
+      interval({ solarKwh: Number.MAX_VALUE }),
+    ]
+
+    expect(() => aggregate(records)).toThrow(/record 1.*overflow/i)
+  })
+
   it.each([
     ['solarKwh', Number.NaN],
     ['gridImportKwh', Number.POSITIVE_INFINITY],
@@ -136,6 +167,11 @@ describe('getTrailingWindow', () => {
       canGoPrevious: false,
       canGoNext: true,
     })
+  })
+
+  it('allows next navigation only when a full 24-hour window remains', () => {
+    expect(getTrailingWindow('24h', 8800, 8928).canGoNext).toBe(false)
+    expect(getTrailingWindow('24h', 8639, 8928).canGoNext).toBe(true)
   })
 
   it('returns all 31 days at the final record', () => {

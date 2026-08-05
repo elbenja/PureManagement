@@ -46,7 +46,14 @@ const zeroTotals = (): EnergyTotals => ({
   avoidedCo2Kg: 0,
 })
 
-const validateRecord = (record: EnergyInterval, index: number) => {
+function validateRecord(
+  record: EnergyInterval | undefined,
+  index: number,
+): asserts record is EnergyInterval {
+  if (record === undefined) {
+    throw new Error(`Record ${index} contains invalid aggregate values`)
+  }
+
   const nonNegativeValues = [
     record.solarKwh,
     record.homeKwh,
@@ -69,6 +76,31 @@ const validateRecord = (record: EnergyInterval, index: number) => {
   }
 }
 
+const validateTotals = (totals: EnergyTotals, index: number) => {
+  const values = Object.values(totals)
+  const nonNegativeValues = [
+    totals.solarKwh,
+    totals.homeKwh,
+    totals.evKwh,
+    totals.energyConsumedKwh,
+    totals.batteryChargeKwh,
+    totals.batteryDischargeKwh,
+    totals.gridImportKwh,
+    totals.gridExportKwh,
+    totals.importCostUsd,
+    totals.exportCreditUsd,
+    totals.counterfactualCostUsd,
+    totals.avoidedCo2Kg,
+  ]
+
+  if (!values.every(Number.isFinite)) {
+    throw new Error(`Record ${index} causes aggregate overflow`)
+  }
+  if (nonNegativeValues.some((value) => value < 0)) {
+    throw new Error(`Record ${index} causes invalid aggregate totals`)
+  }
+}
+
 const addRecord = (totals: EnergyTotals, record: EnergyInterval): EnergyTotals => ({
   solarKwh: totals.solarKwh + record.solarKwh,
   homeKwh: totals.homeKwh + record.homeKwh,
@@ -88,10 +120,12 @@ const addRecord = (totals: EnergyTotals, record: EnergyInterval): EnergyTotals =
 export const aggregateIntervals = (records: readonly EnergyInterval[]): EnergyTotals => {
   let totals = zeroTotals()
 
-  records.forEach((record, index) => {
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]
     validateRecord(record, index)
     totals = addRecord(totals, record)
-  })
+    validateTotals(totals, index)
+  }
 
   return totals
 }
@@ -100,11 +134,13 @@ export const buildPrefixTotals = (records: readonly EnergyInterval[]): EnergyTot
   const prefixes = [zeroTotals()]
   let totals = prefixes[0]
 
-  records.forEach((record, index) => {
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]
     validateRecord(record, index)
     totals = addRecord(totals, record)
+    validateTotals(totals, index)
     prefixes.push(totals)
-  })
+  }
 
   return prefixes
 }
@@ -129,6 +165,6 @@ export const getTrailingWindow = (
     start,
     end,
     canGoPrevious: start > 0,
-    canGoNext: end < recordCount - 1,
+    canGoNext: end + rangeSlots[range] < recordCount,
   }
 }
