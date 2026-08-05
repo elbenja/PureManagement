@@ -18,12 +18,15 @@ const number = (value: number, digits = 3) => value.toFixed(digits)
 
 export const SimulationInspector = ({ records }: SimulationInspectorProps) => {
   const simulation = useEnergySimulation(records)
+  const datasetKey = records.length === 0
+    ? 'empty'
+    : `${records.length}:${records[0]?.iso ?? ''}:${records.at(-1)?.iso ?? ''}`
 
   useEffect(() => {
     if (records.length === 0) return
     simulation.scrubTo(records.length - 1)
     simulation.pause()
-  }, [records.length, simulation.pause, simulation.scrubTo])
+  }, [datasetKey, records.length, simulation.pause, simulation.scrubTo])
 
   const { live, history } = simulation
 

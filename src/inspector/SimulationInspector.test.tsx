@@ -95,4 +95,31 @@ describe('SimulationInspector', () => {
 
     expect(screen.getByText('No active transfers')).toBeVisible()
   })
+
+  it('preserves user navigation for an equivalent dataset copy', () => {
+    const { rerender } = render(<SimulationInspector records={records} />)
+    fireEvent.change(screen.getByLabelText('Simulation interval'), {
+      target: { value: '0' },
+    })
+
+    rerender(<SimulationInspector records={records.slice()} />)
+
+    expect(screen.getByLabelText('Simulation interval')).toHaveValue('0')
+  })
+
+  it('reinitializes at the final record for a same-length replacement dataset', () => {
+    const { rerender } = render(<SimulationInspector records={records} />)
+    fireEvent.change(screen.getByLabelText('Simulation interval'), {
+      target: { value: '0' },
+    })
+    const replacement = records.map((record, index) => {
+      if (index !== 0 && index !== records.length - 1) return record
+      return { ...record, iso: record.iso.replace('2026-08', '2026-09') }
+    })
+
+    rerender(<SimulationInspector records={replacement} />)
+
+    expect(screen.getByLabelText('Simulation interval')).toHaveValue('8927')
+    expect(screen.getByText('Paused')).toBeVisible()
+  })
 })
