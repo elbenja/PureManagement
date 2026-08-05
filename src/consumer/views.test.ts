@@ -4,6 +4,15 @@ import { generateMonth } from '../simulation/generateMonth'
 import { rangeSlots } from '../simulation/aggregate'
 import { getHistoryView, getLiveFrame } from './views'
 
+const batteryTransferKw = (
+  record: ReturnType<typeof generateMonth>[number],
+  direction: 'incoming' | 'outgoing',
+) => record.transfers
+  .filter((transfer) => direction === 'incoming'
+    ? transfer.destination === 'battery'
+    : transfer.source === 'battery')
+  .reduce((total, transfer) => total + transfer.kw, 0)
+
 describe('component-ready views', () => {
   const records = generateMonth()
 
@@ -68,6 +77,30 @@ describe('component-ready views', () => {
     expect(frame.transfers).toEqual(record.transfers)
   })
 
+  it('interpolates battery display power from canonical AC-side transfers', () => {
+    const index = records.findIndex((record, recordIndex) => {
+      const next = records[recordIndex + 1]
+      return next !== undefined && (
+        batteryTransferKw(record, 'incoming') !== batteryTransferKw(next, 'incoming') ||
+        batteryTransferKw(record, 'outgoing') !== batteryTransferKw(next, 'outgoing')
+      )
+    })
+    const record = records[index]!
+    const next = records[index + 1]!
+    const fraction = 0.25
+    const expectedIncomingKw = batteryTransferKw(record, 'incoming') +
+      (batteryTransferKw(next, 'incoming') - batteryTransferKw(record, 'incoming')) * fraction
+    const expectedOutgoingKw = batteryTransferKw(record, 'outgoing') +
+      (batteryTransferKw(next, 'outgoing') - batteryTransferKw(record, 'outgoing')) * fraction
+    const expectedNetKw = expectedOutgoingKw - expectedIncomingKw
+
+    expect(getLiveFrame(records, index, fraction)!.nodes[3]).toMatchObject({
+      chargeKw: Math.max(0, -expectedNetKw),
+      dischargeKw: Math.max(0, expectedNetKw),
+      powerKw: Math.abs(expectedNetKw),
+    })
+  })
+
   it('provides explicit flow directions, statuses, and battery percentage', () => {
     const batteryChargingIndex = records.findIndex((record) => record.batteryChargeKw > 0)
     const batteryDischargingIndex = records.findIndex((record) => record.batteryDischargeKw > 0)
@@ -78,16 +111,27 @@ describe('component-ready views', () => {
       id: 'battery',
       direction: 'charging',
       status: 'charging',
-      chargeKw: records[batteryChargingIndex]!.batteryChargeKw,
+      chargeKw: batteryTransferKw(records[batteryChargingIndex]!, 'incoming'),
       dischargeKw: 0,
       socPercent:
         records[batteryChargingIndex]!.batterySocEndKwh /
         LOS_ANGELES_AUGUST_2026.battery.capacityKwh * 100,
     })
+    expect(batteryTransferKw(records[batteryChargingIndex]!, 'incoming')).not.toBeCloseTo(
+      records[batteryChargingIndex]!.batteryChargeKw,
+      10,
+    )
     expect(getLiveFrame(records, batteryDischargingIndex)!.nodes[3]).toMatchObject({
       direction: 'discharging',
       status: 'discharging',
+      chargeKw: 0,
+      dischargeKw: batteryTransferKw(records[batteryDischargingIndex]!, 'outgoing'),
+      powerKw: batteryTransferKw(records[batteryDischargingIndex]!, 'outgoing'),
     })
+    expect(batteryTransferKw(records[batteryDischargingIndex]!, 'outgoing')).not.toBeCloseTo(
+      records[batteryDischargingIndex]!.batteryDischargeKw,
+      10,
+    )
     expect(getLiveFrame(records, gridImportingIndex)!.nodes[4]).toMatchObject({
       id: 'grid',
       direction: 'importing',
@@ -143,6 +187,20 @@ describe('component-ready views', () => {
       gridImportKw: records[6_912]!.gridImportKw,
       gridExportKw: records[6_912]!.gridExportKw,
     })
+  })
+
+  it('charts battery net power from the same AC-side transfers as the live flow map', () => {
+    const chargingIndex = records.findIndex((record) => record.batteryChargeKw > 0)
+    const dischargingIndex = records.findIndex((record) => record.batteryDischargeKw > 0)
+
+    for (const index of [chargingIndex, dischargingIndex]) {
+      const view = getHistoryView(records, '24h', index)!
+      const point = view.series.find((candidate) => candidate.index === index)!
+      const expectedNetKw = batteryTransferKw(records[index]!, 'outgoing') -
+        batteryTransferKw(records[index]!, 'incoming')
+
+      expect(point.batteryNetKw).toBeCloseTo(expectedNetKw, 12)
+    }
   })
 
   it('clamps history anchors and supports partial initial windows', () => {

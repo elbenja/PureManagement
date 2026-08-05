@@ -42,10 +42,13 @@ export interface EvNodeView {
 export interface BatteryNodeView {
   id: 'battery'
   label: 'Battery'
+  /** AC-side power, matching the canonical transfer routes. */
   powerKw: number
   direction: 'charging' | 'discharging' | 'idle'
   status: 'charging' | 'discharging' | 'idle'
+  /** AC-side power entering the battery. */
   chargeKw: number
+  /** AC-side power leaving the battery. */
   dischargeKw: number
   socKwh: number
   socPercent: number
@@ -118,7 +121,7 @@ export interface HistorySeriesPoint {
   solarKw: number
   homeKw: number
   evKw: number
-  /** Positive values discharge to loads; negative values charge the battery. */
+  /** AC-side power: positive discharges to loads; negative charges the battery. */
   batteryNetKw: number
   gridImportKw: number
   gridExportKw: number
@@ -158,6 +161,15 @@ const resolveBidirectionalFlow = (
   }
 }
 
+const batteryTransferKw = (
+  record: EnergyInterval,
+  direction: 'incoming' | 'outgoing',
+): number => record.transfers
+  .filter((transfer) => direction === 'incoming'
+    ? transfer.destination === 'battery'
+    : transfer.source === 'battery')
+  .reduce((total, transfer) => total + transfer.kw, 0)
+
 export const getLiveFrame = (
   records: readonly EnergyInterval[],
   index: number,
@@ -176,8 +188,14 @@ export const getLiveFrame = (
   const homeKw = interpolate(record.homeKw, next.homeKw)
   const evKw = interpolate(record.evKw, next.evKw)
   const batteryFlow = resolveBidirectionalFlow(
-    interpolate(record.batteryChargeKw, next.batteryChargeKw),
-    interpolate(record.batteryDischargeKw, next.batteryDischargeKw),
+    interpolate(
+      batteryTransferKw(record, 'incoming'),
+      batteryTransferKw(next, 'incoming'),
+    ),
+    interpolate(
+      batteryTransferKw(record, 'outgoing'),
+      batteryTransferKw(next, 'outgoing'),
+    ),
   )
   const gridFlow = resolveBidirectionalFlow(
     interpolate(record.gridImportKw, next.gridImportKw),
@@ -305,7 +323,9 @@ export const getHistoryView = (
       solarKw: record.solarKw,
       homeKw: record.homeKw,
       evKw: record.evKw,
-      batteryNetKw: record.batteryDischargeKw - record.batteryChargeKw,
+      batteryNetKw:
+        batteryTransferKw(record, 'outgoing') -
+        batteryTransferKw(record, 'incoming'),
       gridImportKw: record.gridImportKw,
       gridExportKw: record.gridExportKw,
     })),
