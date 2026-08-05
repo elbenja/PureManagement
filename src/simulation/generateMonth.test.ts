@@ -210,6 +210,16 @@ describe('validateMonth', () => {
     expect(validateMonth(records).join('\n')).toMatch(/day 31.*exactly one.*trip/i)
   })
 
+  it('rejects a positive trip while the vehicle is marked available', () => {
+    const records = mutableMonth()
+    const tripIndex = records.findIndex((record) => record.tripKwh > 0)
+    records[tripIndex]!.evAvailable = true
+
+    expect(validateMonth(records)).toContain(
+      `index ${tripIndex}: EV trip requires the vehicle to be unavailable`,
+    )
+  })
+
   it.each([
     [
       'a missing final record',

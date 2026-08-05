@@ -446,6 +446,9 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     if (!record.evAvailable && record.evKwh !== 0) {
       error(`index ${index}: EV cannot charge while unavailable`)
     }
+    if (record.tripKwh > tolerance && record.evAvailable !== false) {
+      error(`index ${index}: EV trip requires the vehicle to be unavailable`)
+    }
     if (record.tripKwh > tolerance && record.evKwh > tolerance) {
       error(`index ${index}: EV trip and charging occur together`)
     }
