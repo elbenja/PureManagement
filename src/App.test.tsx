@@ -10,4 +10,10 @@ describe('App', () => {
       screen.getByRole('heading', { name: /woodland hills energy/i }),
     ).toBeInTheDocument()
   })
+
+  it('cleans up the rendered DOM after each test', () => {
+    expect(
+      screen.queryByRole('heading', { name: /woodland hills energy/i }),
+    ).not.toBeInTheDocument()
+  })
 })

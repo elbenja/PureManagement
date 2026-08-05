@@ -113,7 +113,7 @@ describe('App', () => {
 
 - [ ] **Step 4: Run the shell test and verify the intended failure**
 
-Run: `bun test src/App.test.tsx`
+Run: `bun run test src/App.test.tsx`
 
 Expected: FAIL because `App` and/or the requested heading does not exist.
 
@@ -192,7 +192,7 @@ describe('August clock', () => {
 
 - [ ] **Step 2: Run the tests and confirm missing-module failures**
 
-Run: `bun test src/simulation/time.test.ts`
+Run: `bun run test src/simulation/time.test.ts`
 
 Expected: FAIL because `time.ts` does not exist.
 
@@ -301,7 +301,7 @@ export function buildAugustClock(): ClockSlot[] {
 
 - [ ] **Step 6: Verify and commit the domain baseline**
 
-Run: `bun test src/simulation/time.test.ts && bun run build`
+Run: `bun run test src/simulation/time.test.ts && bun run build`
 
 Expected: two passing tests and successful build.
 
@@ -346,7 +346,7 @@ describe('solar generation', () => {
 
 - [ ] **Step 2: Run and confirm the missing-module failure**
 
-Run: `bun test src/simulation/solar.test.ts`
+Run: `bun run test src/simulation/solar.test.ts`
 
 Expected: FAIL because the condition and solar modules do not exist.
 
@@ -378,7 +378,7 @@ The implementation must return `{ kw, kwh }[]`, use `kwh = kw / 12`, and never c
 
 - [ ] **Step 5: Verify determinism, totals, and build**
 
-Run: `bun test src/simulation/solar.test.ts && bun run build`
+Run: `bun run test src/simulation/solar.test.ts && bun run build`
 
 Expected: two passing solar tests and successful build.
 
@@ -419,7 +419,7 @@ describe('home demand', () => {
 
 - [ ] **Step 2: Run and confirm the missing-module failure**
 
-Run: `bun test src/simulation/home.test.ts`
+Run: `bun run test src/simulation/home.test.ts`
 
 Expected: FAIL because `home.ts` does not exist.
 
@@ -446,7 +446,7 @@ export function generateHomeLoad(clock: ClockSlot[], conditions: Condition[]): H
 
 - [ ] **Step 4: Verify and commit home demand**
 
-Run: `bun test src/simulation/home.test.ts && bun run build`
+Run: `bun run test src/simulation/home.test.ts && bun run build`
 
 Expected: two passing load tests and successful build.
 
@@ -486,7 +486,7 @@ describe('EV model', () => {
 
 - [ ] **Step 2: Run and confirm the missing-module failure**
 
-Run: `bun test src/simulation/ev.test.ts`
+Run: `bun run test src/simulation/ev.test.ts`
 
 Expected: FAIL because `ev.ts` does not exist.
 
@@ -498,7 +498,7 @@ Return `{ chargeKw, chargeKwh, available, socStartKwh, socEndKwh, tripKwh }[]`. 
 
 - [ ] **Step 4: Verify and commit EV behavior**
 
-Run: `bun test src/simulation/ev.test.ts && bun run build`
+Run: `bun run test src/simulation/ev.test.ts && bun run build`
 
 Expected: two passing EV tests and successful build.
 
@@ -539,7 +539,7 @@ describe('energy router', () => {
 
 - [ ] **Step 2: Run and confirm the missing-module failure**
 
-Run: `bun test src/simulation/router.test.ts`
+Run: `bun run test src/simulation/router.test.ts`
 
 Expected: FAIL because `router.ts` does not exist.
 
@@ -566,7 +566,7 @@ it.each([
 
 - [ ] **Step 5: Verify and commit routing**
 
-Run: `bun test src/simulation/router.test.ts && bun run build`
+Run: `bun run test src/simulation/router.test.ts && bun run build`
 
 Expected: all router cases pass and the build succeeds.
 
@@ -608,7 +608,7 @@ describe('interval accounting', () => {
 
 - [ ] **Step 2: Run and confirm the missing-module failure**
 
-Run: `bun test src/simulation/accounting.test.ts`
+Run: `bun run test src/simulation/accounting.test.ts`
 
 Expected: FAIL because `accounting.ts` does not exist.
 
@@ -653,7 +653,7 @@ describe('trailing history windows', () => {
 
 - [ ] **Step 5: Verify and commit accounting**
 
-Run: `bun test src/simulation/accounting.test.ts src/simulation/aggregate.test.ts && bun run build`
+Run: `bun run test src/simulation/accounting.test.ts src/simulation/aggregate.test.ts && bun run build`
 
 Expected: four passing accounting/aggregation tests and successful build.
 
@@ -698,7 +698,7 @@ describe('approved month', () => {
 
 - [ ] **Step 2: Run and confirm the missing-module failure**
 
-Run: `bun test src/simulation/generateMonth.test.ts`
+Run: `bun run test src/simulation/generateMonth.test.ts`
 
 Expected: FAIL because the generator and validator do not exist.
 
@@ -722,7 +722,7 @@ export function balanceError(record: EnergyInterval): number {
 
 - [ ] **Step 5: Verify the whole simulation and commit**
 
-Run: `bun test src/simulation && bun run build`
+Run: `bun run test src/simulation && bun run build`
 
 Expected: all simulation tests pass, the month contains 8,928 records, and the build succeeds.
 
@@ -761,7 +761,7 @@ describe('playback', () => {
 
 - [ ] **Step 2: Run and confirm the missing-module failure**
 
-Run: `bun test src/playback/playback.test.ts`
+Run: `bun run test src/playback/playback.test.ts`
 
 Expected: FAIL because the playback modules do not exist.
 
@@ -787,7 +787,7 @@ Only interpolate instantaneous kW and state of charge between `records[index]` a
 
 - [ ] **Step 5: Verify and commit playback**
 
-Run: `bun test src/playback/playback.test.ts && bun run build`
+Run: `bun run test src/playback/playback.test.ts && bun run build`
 
 Expected: three passing playback tests and successful build.
 
@@ -843,7 +843,7 @@ it('selects and navigates trailing history windows', () => {
 
 - [ ] **Step 2: Run and confirm the missing-component failure**
 
-Run: `bun test src/components`
+Run: `bun run test src/components`
 
 Expected: FAIL because the components do not exist.
 
@@ -859,7 +859,7 @@ Add a `TimeRangeControls` section to the same file with segmented buttons labele
 
 - [ ] **Step 5: Verify and commit the components**
 
-Run: `bun test src/components && bun run build`
+Run: `bun run test src/components && bun run build`
 
 Expected: both interaction tests pass and the build succeeds.
 
@@ -893,7 +893,7 @@ it('shows active nodes and only active transfer routes', () => {
 
 - [ ] **Step 2: Run and confirm the missing-component failure**
 
-Run: `bun test src/components/EnergyFlowMap.test.tsx`
+Run: `bun run test src/components/EnergyFlowMap.test.tsx`
 
 Expected: FAIL because `EnergyFlowMap.tsx` does not exist.
 
@@ -909,7 +909,7 @@ In `src/styles.css`, define node cards, dotted paths, `@keyframes energy-flow`, 
 
 - [ ] **Step 5: Verify and commit the flow map**
 
-Run: `bun test src/components/EnergyFlowMap.test.tsx && bun run build`
+Run: `bun run test src/components/EnergyFlowMap.test.tsx && bun run build`
 
 Expected: the test passes and the build succeeds.
 
@@ -949,7 +949,7 @@ it('uses the approved energy and money language', () => {
 
 - [ ] **Step 2: Run and confirm the missing-component failure**
 
-Run: `bun test src/components/Dashboard.test.tsx`
+Run: `bun run test src/components/Dashboard.test.tsx`
 
 Expected: FAIL because `Dashboard.tsx` does not exist.
 
@@ -989,7 +989,7 @@ Define CSS custom properties for ink navy, paper white, mint energy, teal second
 
 - [ ] **Step 6: Verify and commit the composed dashboard**
 
-Run: `bun test src/components/Dashboard.test.tsx && bun run check`
+Run: `bun run test src/components/Dashboard.test.tsx && bun run check`
 
 Expected: dashboard copy test passes, all earlier tests pass, and the production build succeeds.
 
