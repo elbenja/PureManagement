@@ -24,6 +24,8 @@ describe('buildAugustClock', () => {
 
 describe('classifyTou', () => {
   it('uses weekday LADWP period boundaries', () => {
+    expect(classifyTou(1, 9 * 60 + 55)).toBe('base')
+    expect(classifyTou(1, 10 * 60)).toBe('low')
     expect(classifyTou(1, 12 * 60 + 55)).toBe('low')
     expect(classifyTou(1, 13 * 60)).toBe('high')
     expect(classifyTou(1, 16 * 60 + 55)).toBe('high')
