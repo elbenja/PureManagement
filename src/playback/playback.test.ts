@@ -51,6 +51,17 @@ describe('playback math', () => {
     expect(advancePosition(12, 1_000, 0)).toBe(0)
   })
 
+  it('returns finite predictable positions for non-finite inputs', () => {
+    expect(advancePosition(12, 1_000, Number.POSITIVE_INFINITY)).toBe(0)
+    expect(advancePosition(Number.NaN, 1_000, 100)).toBe(0)
+    expect(advancePosition(102, Number.NaN, 100)).toBe(2)
+  })
+
+  it('normalizes the record count to a positive integer', () => {
+    expect(advancePosition(4, 0, 3.8)).toBe(1)
+    expect(advancePosition(4, 0, 0.8)).toBe(0)
+  })
+
   it('interpolates power and clamps the fraction', () => {
     expect(interpolatePower(1, 3, 0.25)).toBe(1.5)
     expect(interpolatePower(1, 3, -1)).toBe(1)
@@ -150,5 +161,49 @@ describe('usePlayback', () => {
 
     expect(cancelAnimationFrameMock).toHaveBeenCalledTimes(1)
     expect(pendingFrames.size).toBe(0)
+  })
+
+  it('never exposes an out-of-range live index when the record count shrinks', () => {
+    const observedIndexes: number[] = []
+    const { result, rerender } = renderHook(
+      ({ count }) => {
+        const playback = usePlayback(count)
+        observedIndexes.push(playback.index)
+        return playback
+      },
+      { initialProps: { count: 500 } },
+    )
+    act(() => result.current.scrubTo(499))
+
+    const observationStart = observedIndexes.length
+    rerender({ count: 100 })
+
+    expect(observedIndexes.slice(observationStart).length).toBeGreaterThan(0)
+    expect(
+      observedIndexes.slice(observationStart).every((index) => index < 100),
+    ).toBe(true)
+    expect(result.current.index).toBe(99)
+  })
+
+  it('never exposes an out-of-range history anchor when the record count shrinks', () => {
+    const observedIndexes: number[] = []
+    const { result, rerender } = renderHook(
+      ({ count }) => {
+        const playback = usePlayback(count)
+        observedIndexes.push(playback.index)
+        return playback
+      },
+      { initialProps: { count: 500 } },
+    )
+    act(() => result.current.setHistoryAnchor(450))
+
+    const observationStart = observedIndexes.length
+    rerender({ count: 100 })
+
+    expect(observedIndexes.slice(observationStart).length).toBeGreaterThan(0)
+    expect(
+      observedIndexes.slice(observationStart).every((index) => index < 100),
+    ).toBe(true)
+    expect(result.current.index).toBe(99)
   })
 })

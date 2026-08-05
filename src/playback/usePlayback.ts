@@ -118,8 +118,12 @@ export const usePlayback = (recordCount: number): PlaybackController => {
   )
 
   const displayedPosition = historyAnchor ?? position
-  const index = count > 0 ? Math.floor(displayedPosition) : 0
-  const fraction = count > 0 ? displayedPosition - index : 0
+  const clampedDisplayedPosition =
+    count > 0 && Number.isFinite(displayedPosition)
+      ? Math.min(count - 1, Math.max(0, displayedPosition))
+      : 0
+  const index = Math.floor(clampedDisplayedPosition)
+  const fraction = clampedDisplayedPosition - index
 
   return {
     index,
