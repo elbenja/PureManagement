@@ -22,6 +22,10 @@ const categories: LoadCategory[] = [
 ]
 const intervalHours = LOS_ANGELES_AUGUST_2026.intervalMinutes / 60
 const MINUTES_PER_DAY = 24 * 60
+const SLOTS_PER_DAY = MINUTES_PER_DAY / LOS_ANGELES_AUGUST_2026.intervalMinutes
+// Broad summer operating envelope for the fixed Woodland Hills simulation inputs.
+const MIN_TEMPERATURE_F = 40
+const MAX_TEMPERATURE_F = 130
 
 const pulse = (minute: number, center: number, width: number) =>
   Math.exp(-0.5 * ((minute - center) / width) ** 2)
@@ -131,10 +135,26 @@ const validateInputs = (clock: ClockSlot[], conditions: Condition[]) => {
     if (!Number.isFinite(slot.dayOfWeek) || !Number.isInteger(slot.dayOfWeek) || slot.dayOfWeek < 0 || slot.dayOfWeek > 6) {
       throw new Error(`Invalid clock day of week at index ${index}`)
     }
+
+    const expectedDay = Math.floor(index / SLOTS_PER_DAY) + 1
+    const expectedMinute = (index % SLOTS_PER_DAY) * LOS_ANGELES_AUGUST_2026.intervalMinutes
+    const expectedDayOfWeek = new Date(Date.UTC(2026, 7, expectedDay)).getUTCDay()
+    if (
+      slot.index !== index ||
+      slot.day !== expectedDay ||
+      slot.minuteOfDay !== expectedMinute ||
+      slot.dayOfWeek !== expectedDayOfWeek
+    ) {
+      throw new Error(`Invalid clock slot at index ${index}`)
+    }
   })
 
   conditions.forEach((condition, index) => {
-    if (!Number.isFinite(condition.temperatureF)) {
+    if (
+      !Number.isFinite(condition.temperatureF) ||
+      condition.temperatureF < MIN_TEMPERATURE_F ||
+      condition.temperatureF > MAX_TEMPERATURE_F
+    ) {
       throw new Error(`Invalid temperature at index ${index}`)
     }
     if (

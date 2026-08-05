@@ -175,4 +175,33 @@ describe('generateHomeLoad', () => {
       ),
     ).toThrow('Invalid occupied flag at index 44')
   })
+
+  it.each([
+    ['a duplicated slot', (clock: ReturnType<typeof buildAugustClock>) =>
+      clock.map((slot, index) => (index === 1 ? clock[0]! : slot)), 1],
+    ['a corrupted index', (clock: ReturnType<typeof buildAugustClock>) =>
+      clock.map((slot, index) => (index === 2 ? { ...slot, index: 12 } : slot)), 2],
+    ['a wrong day', (clock: ReturnType<typeof buildAugustClock>) =>
+      clock.map((slot, index) => (index === 288 ? { ...slot, day: 1 } : slot)), 288],
+    ['a wrong minute', (clock: ReturnType<typeof buildAugustClock>) =>
+      clock.map((slot, index) => (index === 3 ? { ...slot, minuteOfDay: 20 } : slot)), 3],
+    ['a wrong day of week', (clock: ReturnType<typeof buildAugustClock>) =>
+      clock.map((slot, index) => (index === 289 ? { ...slot, dayOfWeek: 2 } : slot)), 289],
+  ])('rejects %s in the canonical clock sequence', (_case, corruptClock, index) => {
+    const clock = buildAugustClock()
+    const conditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId)
+
+    expect(() => generateHomeLoad(corruptClock(clock), conditions)).toThrow(
+      `Invalid clock slot at index ${index}`,
+    )
+  })
+
+  it.each([Number.MAX_VALUE, 39.9])('rejects implausible finite temperatures: %s', (temperatureF) => {
+    const clock = buildAugustClock()
+    const conditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId).map((condition, index) =>
+      index === 45 ? { ...condition, temperatureF } : condition,
+    )
+
+    expect(() => generateHomeLoad(clock, conditions)).toThrow('Invalid temperature at index 45')
+  })
 })
