@@ -52,6 +52,16 @@ describe('August conditions and solar generation', () => {
     expect(new Set(noonValues.map((value) => value.toFixed(2))).size).toBeGreaterThanOrEqual(10)
   })
 
+  it('rejects an unreachable solar target when no daylight generation is available', () => {
+    const clock = buildAugustClock()
+    const conditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId).map((condition) => ({
+      ...condition,
+      cloudFactor: 0,
+    }))
+
+    expect(() => generateSolar(clock, conditions)).toThrow('Solar target unreachable')
+  })
+
   it('sets the required day types and correlated cloud profiles', () => {
     const clock = buildAugustClock()
     const conditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId)
