@@ -164,7 +164,7 @@ export const getTrailingWindow = (
   return {
     start,
     end,
-    canGoPrevious: start > 0,
+    canGoPrevious: start >= rangeSlots[range],
     canGoNext: end + rangeSlots[range] < recordCount,
   }
 }

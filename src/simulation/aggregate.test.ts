@@ -169,6 +169,12 @@ describe('getTrailingWindow', () => {
     })
   })
 
+  it('allows previous navigation only when a full 24-hour window precedes it', () => {
+    expect(getTrailingWindow('24h', 574, 8928).canGoPrevious).toBe(false)
+    expect(getTrailingWindow('24h', 575, 8928).canGoPrevious).toBe(true)
+    expect(getTrailingWindow('24h', 288, 8928).canGoPrevious).toBe(false)
+  })
+
   it('allows next navigation only when a full 24-hour window remains', () => {
     expect(getTrailingWindow('24h', 8800, 8928).canGoNext).toBe(false)
     expect(getTrailingWindow('24h', 8639, 8928).canGoNext).toBe(true)

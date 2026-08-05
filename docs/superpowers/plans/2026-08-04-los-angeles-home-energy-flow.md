@@ -630,7 +630,7 @@ export function accountInterval(input: AccountingInput): AccountingResult {
 
 `aggregateIntervals(records)` must sum solar, home+EV consumption, grid bought, grid sent, battery charge/discharge, import cost, export credit, counterfactual cost, savings, and avoided CO2e. `buildPrefixTotals(records)` must return 8,929 entries beginning with zero so cumulative cards can read totals at any playback index without rescanning the month.
 
-Add `TimeRange = '24h' | '7d' | '31d'`, `rangeSlots = { '24h': 288, '7d': 2_016, '31d': 8_928 }`, and `getTrailingWindow(range, anchorIndex, recordCount)`. The helper returns inclusive start/end indexes, clamps at the dataset boundaries, and exposes navigation controls. `canGoNext` is true only when a full next selected-period window fits: `end + rangeSlots[range] < recordCount`.
+Add `TimeRange = '24h' | '7d' | '31d'`, `rangeSlots = { '24h': 288, '7d': 2_016, '31d': 8_928 }`, and `getTrailingWindow(range, anchorIndex, recordCount)`. The helper returns inclusive start/end indexes, clamps at the dataset boundaries, and exposes navigation controls. `canGoPrevious` is true only when a full previous selected-period window fits: `start >= rangeSlots[range]`. `canGoNext` is true only when a full next selected-period window fits: `end + rangeSlots[range] < recordCount`.
 
 Cover the window boundaries with this focused test:
 
@@ -642,6 +642,8 @@ describe('trailing history windows', () => {
   it('moves through 24-hour history and stops at dataset boundaries', () => {
     expect(getTrailingWindow('24h', 575, 8_928)).toMatchObject({ start: 288, end: 575, canGoPrevious: true, canGoNext: true });
     expect(getTrailingWindow('24h', 287, 8_928)).toMatchObject({ start: 0, end: 287, canGoPrevious: false });
+    expect(getTrailingWindow('24h', 574, 8_928).canGoPrevious).toBe(false);
+    expect(getTrailingWindow('24h', 288, 8_928).canGoPrevious).toBe(false);
     expect(getTrailingWindow('24h', 8_800, 8_928).canGoNext).toBe(false);
     expect(getTrailingWindow('24h', 8_639, 8_928).canGoNext).toBe(true);
   });
