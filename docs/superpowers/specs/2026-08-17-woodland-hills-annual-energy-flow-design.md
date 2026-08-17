@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-17
 
-**Status:** Approved design, pending written-spec review
+**Status:** Approved
 
 ## 1. Purpose
 
