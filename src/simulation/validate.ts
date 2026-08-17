@@ -1,4 +1,4 @@
-import type { DayType, EnergyInterval, LoadCategory, Transfer } from '../domain/energy'
+import type { DayType, EnergyInterval, LoadCategory, Transfer, WeatherState } from '../domain/energy'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 import { accountInterval } from './accounting'
 import { aggregateIntervals } from './aggregate'
@@ -25,6 +25,7 @@ const categories: LoadCategory[] = [
   'electronicsOther',
 ]
 const dayTypes: DayType[] = ['weekday', 'weekend', 'heatwave', 'cloudy']
+const weatherStates: WeatherState[] = ['clear', 'partly-cloudy', 'overcast', 'rain']
 const approvedTransfers = new Set([
   'solar-home',
   'solar-ev',
@@ -110,7 +111,17 @@ const validateClock = (
   seenIso: Set<string>,
   error: (message: string) => void,
 ) => {
-  const clockFields = ['iso', 'day', 'dayOfWeek', 'minuteOfDay', 'tou'] as const
+  const clockFields = [
+    'iso',
+    'year',
+    'month',
+    'day',
+    'dayOfYear',
+    'dayOfWeek',
+    'minuteOfDay',
+    'utcOffset',
+    'tou',
+  ] as const
   if (record.index !== expected.index) error(`index ${index}: clock index must be ${expected.index}`)
   clockFields.forEach((field) => {
     if (record[field] !== expected[field]) {
@@ -325,8 +336,18 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     }
     if (dayTypes.includes(candidate.dayType as DayType)) seenDayTypes.add(candidate.dayType as DayType)
     else error(`index ${index}: invalid dayType`)
+    if (!weatherStates.includes(candidate.weatherState as WeatherState)) {
+      error(`index ${index}: invalid weatherState`)
+    }
     if (typeof candidate.cloudFactor === 'number' && (candidate.cloudFactor < 0 || candidate.cloudFactor > 1)) {
       error(`index ${index}: cloudFactor must be within 0..1`)
+    }
+    if (
+      typeof candidate.precipitationInches !== 'number' ||
+      !Number.isFinite(candidate.precipitationInches) ||
+      candidate.precipitationInches < 0
+    ) {
+      error(`index ${index}: precipitationInches must be finite and nonnegative`)
     }
 
     const breakdown = candidate.homeBreakdownKwh

@@ -186,6 +186,37 @@ describe('generateMonth', () => {
 })
 
 describe('validateMonth', () => {
+  it.each([
+    ['year', (record: EnergyInterval) => { record.year = 2025 }],
+    ['month', (record: EnergyInterval) => { record.month = 7 }],
+    ['dayOfYear', (record: EnergyInterval) => { record.dayOfYear = 212 }],
+    ['utcOffset', (record: EnergyInterval) => { record.utcOffset = '-08:00' }],
+  ])('rejects a corrupted %s canonical clock field', (field, corrupt) => {
+    const records = mutableMonth()
+    corrupt(records[100]!)
+
+    expect(validateMonth(records).join('\n')).toMatch(
+      new RegExp(`index 100: clock ${field} must match the canonical clock`),
+    )
+  })
+
+  it('rejects an invalid weather state', () => {
+    const records = mutableMonth()
+    ;(records[120] as unknown as Record<string, unknown>).weatherState = 'fog'
+
+    expect(validateMonth(records).join('\n')).toMatch(/index 120: invalid weatherState/)
+  })
+
+  it.each([
+    ['negative', -0.01, /index 140: precipitationInches must be finite and nonnegative/],
+    ['nonfinite', Number.NaN, /index 140: precipitationInches must be finite and nonnegative/],
+  ])('rejects %s precipitation', (_case, precipitationInches, pattern) => {
+    const records = mutableMonth()
+    records[140]!.precipitationInches = precipitationInches
+
+    expect(validateMonth(records).join('\n')).toMatch(pattern)
+  })
+
   it('rejects a missing day-31 trip even when vehicle chronology remains internally consistent', () => {
     const records = mutableMonth()
     const tripIndex = records.findIndex((record) => record.day === 31 && record.tripKwh > 0)

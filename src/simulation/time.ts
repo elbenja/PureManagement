@@ -46,7 +46,7 @@ export const buildAugustClock = (): ClockSlot[] => {
         dayOfYear: day + 212,
         dayOfWeek,
         minuteOfDay,
-        utcOffset: '-07:00',
+        utcOffset: LOS_ANGELES_AUGUST_2026.location.utcOffset,
         tou: classifyTou(dayOfWeek, minuteOfDay),
       })
     }
