@@ -1,10 +1,12 @@
-import type { ClockSlot, DayType } from '../domain/energy'
+import type { ClockSlot, DayType, WeatherState } from '../domain/energy'
 import { mulberry32, seedFromString } from './random'
 
 export interface Condition {
   dayType: DayType
   temperatureF: number
   cloudFactor: number
+  weatherState: WeatherState
+  precipitationInches: number
   occupied: boolean
 }
 
@@ -45,10 +47,19 @@ export const buildConditions = (clock: ClockSlot[], seedId: string): Condition[]
       0.045 * Math.sin(Math.PI * 2 * dayFraction + weather.cloudPhase) +
       (dayType === 'cloudy' ? 0.06 * Math.sin(Math.PI * 4 * dayFraction + weather.cloudPhase) : 0)
 
+    const cloudFactor = Number(clamp(weather.cloudBaseline + intradayCloudVariation, 0, 1).toFixed(4))
+    const weatherState: WeatherState = dayType === 'cloudy'
+      ? 'overcast'
+      : cloudFactor < 0.88
+        ? 'partly-cloudy'
+        : 'clear'
+
     return {
       dayType,
       temperatureF: Number(temperatureF.toFixed(3)),
-      cloudFactor: Number(clamp(weather.cloudBaseline + intradayCloudVariation, 0, 1).toFixed(4)),
+      cloudFactor,
+      weatherState,
+      precipitationInches: 0,
       occupied:
         slot.dayOfWeek === 0 ||
         slot.dayOfWeek === 6 ||

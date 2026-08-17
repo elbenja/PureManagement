@@ -40,9 +40,13 @@ export const buildAugustClock = (): ClockSlot[] => {
       slots.push({
         index: slots.length,
         iso: formatAugustIso(day, minuteOfDay),
+        year: 2026,
+        month: 8,
         day,
+        dayOfYear: day + 212,
         dayOfWeek,
         minuteOfDay,
+        utcOffset: '-07:00',
         tou: classifyTou(dayOfWeek, minuteOfDay),
       })
     }

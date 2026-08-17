@@ -2,6 +2,8 @@ export type TouPeriod = 'base' | 'low' | 'high'
 
 export type DayType = 'weekday' | 'weekend' | 'heatwave' | 'cloudy'
 
+export type WeatherState = 'clear' | 'partly-cloudy' | 'overcast' | 'rain'
+
 export type EnergyNode = 'solar' | 'home' | 'ev' | 'battery' | 'grid'
 
 export type LoadCategory =
@@ -16,9 +18,13 @@ export type LoadCategory =
 export interface ClockSlot {
   index: number
   iso: string
+  year: number
+  month: number
   day: number
+  dayOfYear: number
   dayOfWeek: number
   minuteOfDay: number
+  utcOffset: '-08:00' | '-07:00'
   tou: TouPeriod
 }
 
@@ -33,6 +39,8 @@ export interface EnergyInterval extends ClockSlot {
   dayType: DayType
   temperatureF: number
   cloudFactor: number
+  weatherState: WeatherState
+  precipitationInches: number
   solarKw: number
   solarKwh: number
   homeKw: number

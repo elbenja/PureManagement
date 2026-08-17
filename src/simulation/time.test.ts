@@ -11,6 +11,12 @@ describe('buildAugustClock', () => {
     expect(new Set(clock.map((slot) => slot.iso)).size).toBe(clock.length)
     expect(clock[0]?.iso).toBe('2026-08-01T00:00:00.000-07:00')
     expect(clock.at(-1)?.iso).toBe('2026-08-31T23:55:00.000-07:00')
+    expect(clock[0]).toMatchObject({
+      year: 2026,
+      month: 8,
+      dayOfYear: 213,
+      utcOffset: '-07:00',
+    })
   })
 
   it('advances day and minute values at the midnight boundary', () => {

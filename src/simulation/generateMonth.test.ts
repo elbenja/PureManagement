@@ -35,6 +35,19 @@ const expectValidationError = (
 }
 
 describe('generateMonth', () => {
+  it('adds annual clock and weather metadata to the first legacy record', () => {
+    const [firstRecord] = generateMonth()
+
+    expect(firstRecord).toMatchObject({
+      year: 2026,
+      month: 8,
+      dayOfYear: 213,
+      utcOffset: '-07:00',
+      precipitationInches: 0,
+    })
+    expect(['clear', 'partly-cloudy', 'overcast', 'rain']).toContain(firstRecord?.weatherState)
+  })
+
   it('builds the same deeply immutable canonical ledger on every call', () => {
     const first = generateMonth()
     const second = generateMonth()

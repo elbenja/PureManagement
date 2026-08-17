@@ -1,9 +1,4 @@
-const deepFreeze = <T>(value: T): T => {
-  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value
-
-  Object.values(value).forEach(deepFreeze)
-  return Object.freeze(value)
-}
+import { deepFreeze } from './deepFreeze'
 
 export const LOS_ANGELES_AUGUST_2026 = deepFreeze({
   id: 'woodland-hills-aug-2026-v1',

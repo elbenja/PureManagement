@@ -56,6 +56,8 @@ export const generateMonth = (): readonly EnergyInterval[] => {
       dayType: condition.dayType,
       temperatureF: condition.temperatureF,
       cloudFactor: condition.cloudFactor,
+      weatherState: condition.weatherState,
+      precipitationInches: condition.precipitationInches,
       solarKw: solarPoint.kw,
       solarKwh: solarPoint.kwh,
       homeKw: homePoint.kw,
