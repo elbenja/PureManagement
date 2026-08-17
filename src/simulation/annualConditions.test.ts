@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
-import { buildAnnualConditions } from './annualConditions'
+import { buildAnnualConditions, selectAnnualWeatherAttempt } from './annualConditions'
 import { buildYearClock } from './yearClock'
 
 const DAY_TYPES = ['weekday', 'weekend', 'heatwave', 'cloudy'] as const
@@ -139,12 +139,95 @@ describe('buildAnnualConditions', () => {
     )
   })
 
+  it('selects the first accepted weather retry and fails after exactly 32 rejected attempts', () => {
+    const clock = buildYearClock()
+    const retried = selectAnnualWeatherAttempt(clock, 'probe-3')
+    const rejectedSeeds: string[] = []
+
+    expect(retried.attempt).toBe(1)
+    expect(() =>
+      selectAnnualWeatherAttempt(clock, 'never-accepted', (_clock, weatherSeed) => {
+        rejectedSeeds.push(weatherSeed)
+        return []
+      }),
+    ).toThrow(/after 32 attempts/)
+    expect(rejectedSeeds).toHaveLength(32)
+    expect(rejectedSeeds[0]).toBe('never-accepted:weather')
+    expect(rejectedSeeds.at(-1)).toBe('never-accepted:weather:31')
+  })
+
+  it('emits complete declared event spans without wrapping or truncating the calendar year', () => {
+    const clock = buildYearClock()
+    const januaryStart = selectAnnualWeatherAttempt(clock, 'start-0').descriptors
+    const rejectedYearEndRain = selectAnnualWeatherAttempt(clock, 'edge-21').descriptors
+    const rejectedYearEndColdSnap = selectAnnualWeatherAttempt(clock, 'edge-51').descriptors
+    const descriptorSets = [
+      januaryStart,
+      rejectedYearEndRain,
+      rejectedYearEndColdSnap,
+      selectAnnualWeatherAttempt(clock, LOS_ANGELES_2026.seedId).descriptors,
+    ]
+    const eventFields = [
+      ['rainEvent', 1, 3],
+      ['heatWaveEvent', 3, 4],
+      ['coldSnapEvent', 2, 3],
+    ] as const
+
+    expect(januaryStart[0]?.rainEvent).toMatchObject({ startDayOfYear: 1, durationDays: 2 })
+    expect(januaryStart[1]?.rainEvent).toEqual(januaryStart[0]?.rainEvent)
+    expect(buildAnnualConditions(clock, 'start-0')[0]!.temperatureF).toBe(
+      Number(
+        (
+          januaryStart[0]!.lowF +
+          (januaryStart[0]!.highF - januaryStart[0]!.lowF) * 0.25 +
+          januaryStart[0]!.dailyOffsetF
+        ).toFixed(3),
+      ),
+    )
+    expect(rejectedYearEndRain[364]?.rainEvent).toBeNull()
+    expect(rejectedYearEndColdSnap[363]?.coldSnapEvent).toBeNull()
+    expect(rejectedYearEndColdSnap[364]?.coldSnapEvent).toBeNull()
+
+    for (const descriptors of descriptorSets) {
+      for (const [field, minimumDuration, maximumDuration] of eventFields) {
+        const events = descriptors
+          .map((descriptor) => descriptor[field])
+          .filter(
+            (event, index, all) =>
+              event !== null &&
+              all.findIndex(
+                (candidate) => candidate?.startDayOfYear === event.startDayOfYear,
+              ) === index,
+          )
+
+        for (const event of events) {
+          expect(event).not.toBeNull()
+          expect(event!.durationDays).toBeGreaterThanOrEqual(minimumDuration)
+          expect(event!.durationDays).toBeLessThanOrEqual(maximumDuration)
+          expect(event!.startDayOfYear + event!.durationDays - 1).toBeLessThanOrEqual(365)
+          expect(
+            descriptors.filter(
+              (descriptor) =>
+                descriptor[field]?.startDayOfYear === event!.startDayOfYear,
+            ),
+          ).toHaveLength(event!.durationDays)
+        }
+      }
+    }
+  })
+
   it('rejects clocks that are incomplete or differ from the canonical annual clock', () => {
     const clock = buildYearClock()
     const malformed = [...clock]
     const extraField = [...clock]
+    const sparse = [...clock]
+    const nullSlot = [...clock]
+    const primitiveSlot = [...clock]
     malformed[42] = { ...malformed[42]!, minuteOfDay: 999 }
     extraField[43] = { ...extraField[43]!, unexpected: true } as (typeof clock)[number]
+    delete sparse[44]
+    nullSlot[45] = null as unknown as (typeof clock)[number]
+    primitiveSlot[46] = 7 as unknown as (typeof clock)[number]
 
     expect(() => buildAnnualConditions(clock.slice(0, -1), LOS_ANGELES_2026.seedId)).toThrow(
       /Expected 105120 clock records/,
@@ -154,6 +237,15 @@ describe('buildAnnualConditions', () => {
     )
     expect(() => buildAnnualConditions(extraField, LOS_ANGELES_2026.seedId)).toThrow(
       /Clock differs from canonical annual clock at index 43/,
+    )
+    expect(() => buildAnnualConditions(sparse, LOS_ANGELES_2026.seedId)).toThrow(
+      /Invalid annual clock slot at index 44/,
+    )
+    expect(() => buildAnnualConditions(nullSlot, LOS_ANGELES_2026.seedId)).toThrow(
+      /Invalid annual clock slot at index 45/,
+    )
+    expect(() => buildAnnualConditions(primitiveSlot, LOS_ANGELES_2026.seedId)).toThrow(
+      /Invalid annual clock slot at index 46/,
     )
   })
 
@@ -222,6 +314,9 @@ describe('buildAnnualConditions', () => {
     const clock = buildYearClock()
     const conditions = buildAnnualConditions(clock, LOS_ANGELES_2026.seedId)
     const days = summarizeDays(clock, conditions)
+    const conditionIndexByDayAndMinute = new Map(
+      clock.map((slot, index) => [`${slot.dayOfYear}:${slot.minuteOfDay}`, index]),
+    )
     let maximumIntradayTemperatureStep = 0
     let maximumIntradayCloudStep = 0
 
@@ -246,46 +341,167 @@ describe('buildAnnualConditions', () => {
 
     for (const day of days) {
       const expected = expectedTemperatureEnvelope(day)
-      expect(day.maximumTemperatureF - day.minimumTemperatureF).toBeCloseTo(
+      const lowIndex = conditionIndexByDayAndMinute.get(`${day.dayOfYear}:${4 * 60}`)!
+      const highIndex = conditionIndexByDayAndMinute.get(`${day.dayOfYear}:${16 * 60}`)!
+
+      expect(conditions[highIndex]!.temperatureF - conditions[lowIndex]!.temperatureF).toBeCloseTo(
         expected.highF - expected.lowF,
         2,
       )
+      // Daily noise is ±1.5 °F, cold snaps subtract 8 °F, and heat waves add 10 °F.
+      // The 0.25 °F margin covers rounded seasonal interpolation during a blend.
+      expect(day.minimumTemperatureF).toBeGreaterThanOrEqual(expected.lowF - 9.75)
+      expect(day.minimumTemperatureF).toBeLessThanOrEqual(expected.lowF + 11.75)
+      expect(day.maximumTemperatureF).toBeGreaterThanOrEqual(expected.highF - 9.75)
+      expect(day.maximumTemperatureF).toBeLessThanOrEqual(expected.highF + 11.75)
     }
-
-    const monthBoundaryRangeChanges = days
-      .slice(1)
-      .filter((day, index) => day.month !== days[index]!.month)
-      .map((day) => {
-        const previousDay = days[day.dayOfYear - 2]!
-        const previousRange = previousDay.maximumTemperatureF - previousDay.minimumTemperatureF
-        const currentRange = day.maximumTemperatureF - day.minimumTemperatureF
-        return Math.abs(currentRange - previousRange)
-      })
 
     expect(Math.min(...conditions.map((condition) => condition.temperatureF))).toBeGreaterThanOrEqual(35)
     expect(Math.max(...conditions.map((condition) => condition.temperatureF))).toBeLessThanOrEqual(112)
-    expect(Math.max(...monthBoundaryRangeChanges)).toBeLessThan(0.2)
-    expect(maximumIntradayTemperatureStep).toBeLessThan(0.35)
-    expect(maximumIntradayCloudStep).toBeLessThan(0.01)
+    expect(maximumIntradayTemperatureStep).toBeLessThan(0.6)
+    expect(maximumIntradayCloudStep).toBeLessThan(0.025)
   })
 
-  it('shapes each rainy day as one continuous daytime pulse', () => {
+  it('keeps every adjacent absolute interval coherent through event boundaries and DST', () => {
     const clock = buildYearClock()
-    const conditions = buildAnnualConditions(clock, LOS_ANGELES_2026.seedId)
-    const rainyDayOfYear = clock.find(
-      (_, index) => conditions[index]!.precipitationInches > 0,
-    )!.dayOfYear
-    const precipitationAt = (minuteOfDay: number) =>
+
+    for (const seedId of [LOS_ANGELES_2026.seedId, 'boundary-4']) {
+      const conditions = buildAnnualConditions(clock, seedId)
+      let maximumTemperatureStep = 0
+      let maximumCloudStep = 0
+      let maximumPrecipitationStep = 0
+
+      for (let index = 1; index < conditions.length; index += 1) {
+        maximumTemperatureStep = Math.max(
+          maximumTemperatureStep,
+          Math.abs(conditions[index]!.temperatureF - conditions[index - 1]!.temperatureF),
+        )
+        maximumCloudStep = Math.max(
+          maximumCloudStep,
+          Math.abs(conditions[index]!.cloudFactor - conditions[index - 1]!.cloudFactor),
+        )
+        maximumPrecipitationStep = Math.max(
+          maximumPrecipitationStep,
+          Math.abs(
+            conditions[index]!.precipitationInches -
+              conditions[index - 1]!.precipitationInches,
+          ),
+        )
+      }
+
+      // The temperature allowance covers the 55/65-minute local-clock jumps at DST.
+      // Heat-wave and cold-snap offsets are blended over 36 absolute five-minute slots.
+      expect(maximumTemperatureStep).toBeLessThan(4.25)
+      expect(maximumCloudStep).toBeLessThan(0.08)
+      expect(maximumPrecipitationStep).toBeLessThan(0.00015)
+    }
+  })
+
+  it('preserves shared rain-system parameters across a month boundary', () => {
+    const clock = buildYearClock()
+    const conditions = buildAnnualConditions(clock, 'boundary-4')
+    const october31 = 304
+    const november1 = 305
+    const conditionAt = (dayOfYear: number, minuteOfDay: number) =>
       conditions[
         clock.findIndex(
-          (slot) => slot.dayOfYear === rainyDayOfYear && slot.minuteOfDay === minuteOfDay,
+          (slot) => slot.dayOfYear === dayOfYear && slot.minuteOfDay === minuteOfDay,
         )
-      ]!.precipitationInches
+      ]!
 
-    expect(precipitationAt(2 * 60 + 50)).toBe(0)
-    expect(precipitationAt(2 * 60 + 55)).toBeGreaterThan(0)
-    expect(precipitationAt(12 * 60 + 15)).toBeGreaterThan(precipitationAt(9 * 60))
-    expect(precipitationAt(12 * 60 + 15)).toBeGreaterThan(precipitationAt(18 * 60))
-    expect(precipitationAt(21 * 60 + 40)).toBe(0)
+    expect(conditionAt(october31, 12 * 60).weatherState).toBe('rain')
+    expect(conditionAt(november1, 12 * 60).weatherState).toBe('rain')
+    expect(conditionAt(november1, 0).cloudFactor).toBeCloseTo(
+      conditionAt(october31, 23 * 60 + 55).cloudFactor,
+      2,
+    )
+    expect(conditionAt(november1, 12 * 60).precipitationInches).toBe(
+      conditionAt(october31, 12 * 60).precipitationInches,
+    )
+    expect(conditionAt(november1, 12 * 60).cloudFactor).toBe(
+      conditionAt(october31, 12 * 60).cloudFactor,
+    )
+  })
+
+  it('persists temperature and cloud parameters through dry heat waves and cold snaps', () => {
+    const descriptors = selectAnnualWeatherAttempt(
+      buildYearClock(),
+      LOS_ANGELES_2026.seedId,
+    ).descriptors
+
+    for (const eventField of ['heatWaveEvent', 'coldSnapEvent'] as const) {
+      const event = descriptors.find(
+        (descriptor) => descriptor[eventField] !== null && descriptor.rainEvent === null,
+      )![eventField]!
+      const eventDays = descriptors.filter(
+        (descriptor) =>
+          descriptor[eventField]?.startDayOfYear === event.startDayOfYear &&
+          descriptor.rainEvent === null,
+      )
+
+      expect(eventDays.length).toBeGreaterThan(1)
+      expect(new Set(eventDays.map((day) => day.dailyOffsetF)).size).toBe(1)
+      expect(new Set(eventDays.map((day) => day.cloudBaseline)).size).toBe(1)
+      expect(new Set(eventDays.map((day) => day.cloudPhase)).size).toBe(1)
+    }
+  })
+
+  it('shapes every rainy local day as one bounded continuous daytime pulse', () => {
+    const clock = buildYearClock()
+    const conditions = buildAnnualConditions(clock, LOS_ANGELES_2026.seedId)
+    const rainyDayNumbers = new Set(
+      clock
+        .filter((_, index) => conditions[index]!.precipitationInches > 0)
+        .map((slot) => slot.dayOfYear),
+    )
+
+    for (const dayOfYear of rainyDayNumbers) {
+      const dayIndexes = clock
+        .map((slot, index) => (slot.dayOfYear === dayOfYear ? index : -1))
+        .filter((index) => index >= 0)
+      const positivePositions = dayIndexes
+        .map((index, position) =>
+          conditions[index]!.precipitationInches > 0 ? position : -1,
+        )
+        .filter((position) => position >= 0)
+      const precipitationAt = (minuteOfDay: number) =>
+        conditions[
+          dayIndexes.find((index) => clock[index]!.minuteOfDay === minuteOfDay)!
+        ]!.precipitationInches
+
+      expect(positivePositions.length).toBeGreaterThan(1)
+      expect(positivePositions.at(-1)! - positivePositions[0]! + 1).toBe(positivePositions.length)
+      expect(precipitationAt(12 * 60 + 15)).toBeGreaterThan(precipitationAt(9 * 60))
+      expect(precipitationAt(12 * 60 + 15)).toBeGreaterThan(precipitationAt(18 * 60))
+      expect(conditions[dayIndexes[0]!]!.precipitationInches).toBe(0)
+      expect(conditions[dayIndexes.at(-1)!]!.precipitationInches).toBe(0)
+    }
+
+    expect(
+      conditions.every(
+        (condition) =>
+          condition.precipitationInches <= 0.0046 &&
+          condition.precipitationInches === Number(condition.precipitationInches.toFixed(6)),
+      ),
+    ).toBe(true)
+  })
+
+  it('groups DST local days into 276 and 300 conditions with weekend occupancy intact', () => {
+    const clock = buildYearClock()
+    const conditions = buildAnnualConditions(clock, LOS_ANGELES_2026.seedId)
+    const indexesByDate = new Map<string, number[]>()
+
+    for (const [index, slot] of clock.entries()) {
+      const date = slot.iso.slice(0, 10)
+      indexesByDate.set(date, [...(indexesByDate.get(date) ?? []), index])
+    }
+
+    const springIndexes = indexesByDate.get('2026-03-08')!
+    const autumnIndexes = indexesByDate.get('2026-11-01')!
+
+    expect(springIndexes).toHaveLength(276)
+    expect(autumnIndexes).toHaveLength(300)
+    expect(springIndexes.every((index) => conditions[index]!.occupied)).toBe(true)
+    expect(autumnIndexes.every((index) => conditions[index]!.occupied)).toBe(true)
   })
 })

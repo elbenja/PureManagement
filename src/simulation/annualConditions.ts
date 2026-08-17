@@ -6,9 +6,18 @@ import { buildYearClock } from './yearClock'
 
 const MINUTES_PER_DAY = 24 * 60
 const MAX_WEATHER_ATTEMPTS = 32
+const DESCRIPTOR_BLEND_SLOTS = 36
 
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, value))
+
+const interpolate = (start: number, end: number, progress: number) =>
+  start + (end - start) * progress
+
+const interpolatePhase = (start: number, end: number, progress: number) => {
+  const shortestDelta = ((end - start + Math.PI * 3) % (Math.PI * 2)) - Math.PI
+  return start + shortestDelta * progress
+}
 
 const randomValue = (seed: string) => mulberry32(seedFromString(seed))()
 
@@ -26,7 +35,25 @@ interface DailyDescriptor {
   rainy: boolean
   heatWave: boolean
   coldSnap: boolean
+  rainEvent: RainEvent | null
+  heatWaveEvent: TemperatureEvent | null
+  coldSnapEvent: TemperatureEvent | null
   dayType: DayType
+}
+
+interface WeatherEvent {
+  startDayOfYear: number
+  durationDays: number
+}
+
+interface TemperatureEvent extends WeatherEvent {
+  temperatureOffsetF: number
+  cloudBaseline: number
+  cloudPhase: number
+}
+
+interface RainEvent extends TemperatureEvent {
+  rainIntensity: number
 }
 
 const assertCanonicalClock = (clock: ClockSlot[]) => {
@@ -36,6 +63,10 @@ const assertCanonicalClock = (clock: ClockSlot[]) => {
 
   const canonical = buildYearClock()
   const mismatch = clock.findIndex((slot, index) => {
+    if (slot === null || typeof slot !== 'object' || Array.isArray(slot)) {
+      throw new Error(`Invalid annual clock slot at index ${index}`)
+    }
+
     const expected = canonical[index]!
     const expectedKeys = Object.keys(expected)
     return Object.keys(slot).length !== expectedKeys.length || expectedKeys.some(
@@ -79,6 +110,9 @@ const generateDailyDescriptors = (clock: ClockSlot[], weatherSeed: string) => {
   let rainDaysRemaining = 0
   let heatWaveDaysRemaining = 0
   let coldSnapDaysRemaining = 0
+  let rainEvent: RainEvent | null = null
+  let heatWaveEvent: TemperatureEvent | null = null
+  let coldSnapEvent: TemperatureEvent | null = null
 
   return [...firstSlotsByDay.values()].map((slot): DailyDescriptor => {
     const profile = LOS_ANGELES_2026.months[slot.month - 1]!
@@ -88,12 +122,24 @@ const generateDailyDescriptors = (clock: ClockSlot[], weatherSeed: string) => {
     const lowF = profile.lowF + (nextProfile.lowF - profile.lowF) * monthProgress
     const highF = profile.highF + (nextProfile.highF - profile.highF) * monthProgress
     const daySeed = `${weatherSeed}:day:${slot.dayOfYear}`
+    const calendarDaysRemaining = 366 - slot.dayOfYear
 
     if (
       rainDaysRemaining === 0 &&
       randomValue(`${daySeed}:rain:start`) < profile.rainStartProbability
     ) {
-      rainDaysRemaining = 1 + Math.floor(randomValue(`${daySeed}:rain:duration`) * 3)
+      const durationDays = 1 + Math.floor(randomValue(`${daySeed}:rain:duration`) * 3)
+      if (durationDays <= calendarDaysRemaining) {
+        rainDaysRemaining = durationDays
+        rainEvent = {
+          startDayOfYear: slot.dayOfYear,
+          durationDays,
+          temperatureOffsetF: (randomValue(`${daySeed}:temperature`) - 0.5) * 3,
+          cloudBaseline: 0.28 + randomValue(`${daySeed}:cloud:baseline`) * 0.13,
+          cloudPhase: randomValue(`${daySeed}:cloud:phase`) * Math.PI * 2,
+          rainIntensity: 0.015 + randomValue(`${daySeed}:rain:intensity`) * 0.04,
+        }
+      }
     }
     if (
       heatWaveDaysRemaining === 0 &&
@@ -101,14 +147,34 @@ const generateDailyDescriptors = (clock: ClockSlot[], weatherSeed: string) => {
       slot.month <= 9 &&
       randomValue(`${daySeed}:heat:start`) < 0.05
     ) {
-      heatWaveDaysRemaining = 3 + Math.floor(randomValue(`${daySeed}:heat:duration`) * 2)
+      const durationDays = 3 + Math.floor(randomValue(`${daySeed}:heat:duration`) * 2)
+      if (durationDays <= calendarDaysRemaining) {
+        heatWaveDaysRemaining = durationDays
+        heatWaveEvent = {
+          startDayOfYear: slot.dayOfYear,
+          durationDays,
+          temperatureOffsetF: (randomValue(`${daySeed}:temperature`) - 0.5) * 3,
+          cloudBaseline: 0.81 + randomValue(`${daySeed}:cloud:baseline`) * 0.17,
+          cloudPhase: randomValue(`${daySeed}:cloud:phase`) * Math.PI * 2,
+        }
+      }
     }
     if (
       coldSnapDaysRemaining === 0 &&
       isWinterMonth(slot.month) &&
       randomValue(`${daySeed}:cold:start`) < 0.04
     ) {
-      coldSnapDaysRemaining = 2 + Math.floor(randomValue(`${daySeed}:cold:duration`) * 2)
+      const durationDays = 2 + Math.floor(randomValue(`${daySeed}:cold:duration`) * 2)
+      if (durationDays <= calendarDaysRemaining) {
+        coldSnapDaysRemaining = durationDays
+        coldSnapEvent = {
+          startDayOfYear: slot.dayOfYear,
+          durationDays,
+          temperatureOffsetF: (randomValue(`${daySeed}:temperature`) - 0.5) * 3,
+          cloudBaseline: 0.81 + randomValue(`${daySeed}:cloud:baseline`) * 0.17,
+          cloudPhase: randomValue(`${daySeed}:cloud:phase`) * Math.PI * 2,
+        }
+      }
     }
 
     const rainy = rainDaysRemaining > 0
@@ -122,13 +188,28 @@ const generateDailyDescriptors = (clock: ClockSlot[], weatherSeed: string) => {
         : weekend
           ? 'weekend'
           : 'weekday'
-    const dailyOffsetF =
-      (randomValue(`${daySeed}:temperature`) - 0.5) * 3 +
-      (heatWave ? 10 : 0) -
-      (coldSnap ? 8 : 0)
+    const dailyTemperatureOffsetF = (randomValue(`${daySeed}:temperature`) - 0.5) * 3
+    const dailyOffsetF = heatWave
+      ? heatWaveEvent!.temperatureOffsetF + 10
+      : coldSnap
+        ? coldSnapEvent!.temperatureOffsetF - 8
+        : rainy
+          ? rainEvent!.temperatureOffsetF
+          : dailyTemperatureOffsetF
     const cloudBaseline = rainy
-      ? 0.28 + randomValue(`${daySeed}:cloud:baseline`) * 0.13
-      : 0.81 + randomValue(`${daySeed}:cloud:baseline`) * 0.17
+      ? rainEvent!.cloudBaseline
+      : heatWave
+        ? heatWaveEvent!.cloudBaseline
+        : coldSnap
+          ? coldSnapEvent!.cloudBaseline
+          : 0.81 + randomValue(`${daySeed}:cloud:baseline`) * 0.17
+    const cloudPhase = rainy
+      ? rainEvent!.cloudPhase
+      : heatWave
+        ? heatWaveEvent!.cloudPhase
+        : coldSnap
+          ? coldSnapEvent!.cloudPhase
+          : randomValue(`${daySeed}:cloud:phase`) * Math.PI * 2
 
     if (rainy) rainDaysRemaining -= 1
     if (heatWave) heatWaveDaysRemaining -= 1
@@ -141,21 +222,33 @@ const generateDailyDescriptors = (clock: ClockSlot[], weatherSeed: string) => {
       highF,
       dailyOffsetF,
       cloudBaseline,
-      cloudPhase: randomValue(`${daySeed}:cloud:phase`) * Math.PI * 2,
-      rainIntensity: 0.015 + randomValue(`${daySeed}:rain:intensity`) * 0.04,
+      cloudPhase,
+      rainIntensity: rainy
+        ? rainEvent!.rainIntensity
+        : 0.015 + randomValue(`${daySeed}:rain:intensity`) * 0.04,
       rainy,
       heatWave,
       coldSnap,
+      rainEvent: rainy ? rainEvent : null,
+      heatWaveEvent: heatWave ? heatWaveEvent : null,
+      coldSnapEvent: coldSnap ? coldSnapEvent : null,
       dayType,
     }
   })
 }
 
-const acceptedDailyDescriptors = (clock: ClockSlot[], seedId: string) => {
+type DailyDescriptorGenerator = (clock: ClockSlot[], weatherSeed: string) => DailyDescriptor[]
+
+/** @internal Test seam for deterministic retry selection. */
+export const selectAnnualWeatherAttempt = (
+  clock: ClockSlot[],
+  seedId: string,
+  generate: DailyDescriptorGenerator = generateDailyDescriptors,
+) => {
   for (let attempt = 0; attempt < MAX_WEATHER_ATTEMPTS; attempt += 1) {
     const weatherSeed = attempt === 0 ? `${seedId}:weather` : `${seedId}:weather:${attempt}`
-    const descriptors = generateDailyDescriptors(clock, weatherSeed)
-    if (hasRequiredEvents(descriptors)) return descriptors
+    const descriptors = generate(clock, weatherSeed)
+    if (hasRequiredEvents(descriptors)) return { attempt, descriptors }
   }
 
   throw new Error(
@@ -165,27 +258,54 @@ const acceptedDailyDescriptors = (clock: ClockSlot[], seedId: string) => {
 
 export const buildAnnualConditions = (clock: ClockSlot[], seedId: string): Condition[] => {
   assertCanonicalClock(clock)
-  const descriptors = acceptedDailyDescriptors(clock, seedId)
+  const { descriptors } = selectAnnualWeatherAttempt(clock, seedId)
+  const firstIndexByDay = new Map<number, number>()
+  for (const [index, slot] of clock.entries()) {
+    if (!firstIndexByDay.has(slot.dayOfYear)) firstIndexByDay.set(slot.dayOfYear, index)
+  }
 
-  return clock.map((slot) => {
+  return clock.map((slot, index) => {
     const descriptor = descriptors[slot.dayOfYear - 1]!
+    const previousDescriptor = descriptors[slot.dayOfYear - 2] ?? descriptor
+    const dayStartIndex = firstIndexByDay.get(slot.dayOfYear)!
+    const descriptorProgress =
+      slot.dayOfYear === 1
+        ? 1
+        : clamp((index - dayStartIndex) / DESCRIPTOR_BLEND_SLOTS, 0, 1)
+    const lowF = interpolate(previousDescriptor.lowF, descriptor.lowF, descriptorProgress)
+    const highF = interpolate(previousDescriptor.highF, descriptor.highF, descriptorProgress)
+    const dailyOffsetF = interpolate(
+      previousDescriptor.dailyOffsetF,
+      descriptor.dailyOffsetF,
+      descriptorProgress,
+    )
+    const cloudBaseline = interpolate(
+      previousDescriptor.cloudBaseline,
+      descriptor.cloudBaseline,
+      descriptorProgress,
+    )
+    const cloudPhase = interpolatePhase(
+      previousDescriptor.cloudPhase,
+      descriptor.cloudPhase,
+      descriptorProgress,
+    )
     const dayFraction = slot.minuteOfDay / MINUTES_PER_DAY
     const temperatureF =
-      descriptor.lowF +
-      (descriptor.highF - descriptor.lowF) *
+      lowF +
+      (highF - lowF) *
         (0.5 + 0.5 * Math.cos(Math.PI * 2 * (dayFraction - 16 / 24))) +
-      descriptor.dailyOffsetF
+      dailyOffsetF
     const rainProgress = clamp((dayFraction - 0.12) / 0.78, 0, 1)
     const rainPulse = descriptor.rainy ? Math.max(0, Math.sin(Math.PI * rainProgress)) : 0
     const precipitationInches = descriptor.rainy
       ? descriptor.rainIntensity * rainPulse / 12
       : 0
     const intradayCloudVariation =
-      0.035 * Math.sin(Math.PI * 2 * dayFraction + descriptor.cloudPhase) +
-      0.018 * Math.sin(Math.PI * 4 * dayFraction + descriptor.cloudPhase / 2)
+      0.035 * Math.sin(Math.PI * 2 * dayFraction + cloudPhase) +
+      0.018 * Math.sin(Math.PI * 4 * dayFraction + cloudPhase / 2)
     const rainSuppression = descriptor.rainy ? 0.08 * rainPulse : 0
     const cloudFactor = clamp(
-      descriptor.cloudBaseline + intradayCloudVariation - rainSuppression,
+      cloudBaseline + intradayCloudVariation - rainSuppression,
       0,
       1,
     )
