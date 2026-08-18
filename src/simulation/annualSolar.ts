@@ -105,7 +105,7 @@ const scaleForTarget = (rawKw: number[], targetKwh: number, month: number) => {
     if (energyAtScale(rawKw, middle) < targetKwh) lower = middle
     else upper = middle
   }
-  return (lower + upper) / 2
+  return lower + (upper - lower) / 2
 }
 
 export const generateAnnualSolar = (

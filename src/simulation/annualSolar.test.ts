@@ -126,15 +126,13 @@ describe('generateAnnualSolar', () => {
     const clippedConditions = conditions.map((condition, index) => ({
       ...condition,
       cloudFactor:
-        clock[index]!.minuteOfDay >= 10 * 60 && clock[index]!.minuteOfDay < 14 * 60 ? 1 : 0.05,
+        clock[index]!.minuteOfDay >= 11 * 60 && clock[index]!.minuteOfDay < 13 * 60 ? 1 : 0.05,
     }))
     const clippedSolar = generateAnnualSolar(clock, clippedConditions)
-    const januaryKwh = clippedSolar.reduce(
-      (total, point, index) => total + (clock[index]!.month === 1 ? point.kwh : 0),
-      0,
-    )
+    const januarySolar = clippedSolar.filter((_, index) => clock[index]!.month === 1)
+    const januaryKwh = januarySolar.reduce((total, point) => total + point.kwh, 0)
 
-    expect(clippedSolar.some((point) => point.kw === LOS_ANGELES_2026.solar.capacityKw)).toBe(true)
+    expect(januarySolar.some((point) => point.kw === LOS_ANGELES_2026.solar.capacityKw)).toBe(true)
     expect(januaryKwh).toBeCloseTo(LOS_ANGELES_2026.months[0]!.solarTargetKwh, 6)
   })
 
@@ -147,6 +145,23 @@ describe('generateAnnualSolar', () => {
 
     for (const month of LOS_ANGELES_2026.months) {
       const total = tinyCloudSolar.reduce(
+        (sum, point, index) => sum + (clock[index]!.month === month.month ? point.kwh : 0),
+        0,
+      )
+      expect(total).toBeCloseTo(month.solarTargetKwh, 6)
+    }
+  })
+
+  it('calibrates reachable near-maximum finite scales without overflowing output points', () => {
+    const extremeCloudConditions = conditions.map((condition) => ({
+      ...condition,
+      cloudFactor: 6e-309,
+    }))
+    const extremeSolar = generateAnnualSolar(clock, extremeCloudConditions)
+
+    expect(extremeSolar.every(({ kw, kwh }) => Number.isFinite(kw) && Number.isFinite(kwh))).toBe(true)
+    for (const month of LOS_ANGELES_2026.months) {
+      const total = extremeSolar.reduce(
         (sum, point, index) => sum + (clock[index]!.month === month.month ? point.kwh : 0),
         0,
       )
