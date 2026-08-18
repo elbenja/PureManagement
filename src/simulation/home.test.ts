@@ -54,14 +54,47 @@ describe('generateHomeLoad', () => {
 
     const first = generateHomeLoad(clock, conditions)
     const second = generateHomeLoad(clock, conditions)
+    const explicitDefault = generateHomeLoad(clock, conditions, {
+      canonicalClock: buildAugustClock(),
+      seedId: LOS_ANGELES_AUGUST_2026.seedId,
+      monthlyTargetsKwh: [LOS_ANGELES_AUGUST_2026.home.targetAugustKwh],
+      includeHeating: false,
+    })
 
     expect(first).toHaveLength(8_928)
     expect(second).toEqual(first)
+    expect(explicitDefault).toEqual(first)
     expect(first[0]!.kw).toBe(0.6805323992061951)
     expect(first.reduce((total, point) => total + point.kwh, 0)).toBeCloseTo(
       LOS_ANGELES_AUGUST_2026.home.targetAugustKwh,
       9,
     )
+  })
+
+  it('preserves the controlled summer cooling threshold, response, and legacy heatwave fixture', () => {
+    const clock = buildAugustClock()
+    const conditions = buildConditions(clock, LOS_ANGELES_AUGUST_2026.seedId)
+    const index = clock.findIndex((slot) => slot.day === 13 && slot.minuteOfDay === 16 * 60)
+    const controlledAt = (temperatureF: number, occupied: boolean) => {
+      const controlled = conditions.map((condition) => ({ ...condition }))
+      controlled[index] = { ...controlled[index]!, temperatureF, occupied }
+      const point = generateHomeLoad(clock, controlled)[index]!
+      return {
+        hvacKwh: point.breakdownKwh.hvac,
+        hvacToRefrigeration: point.breakdownKwh.hvac / point.breakdownKwh.refrigeration,
+      }
+    }
+    const at73 = controlledAt(73, true)
+    const at80Occupied = controlledAt(80, true)
+    const at90Occupied = controlledAt(90, true)
+    const at80Unoccupied = controlledAt(80, false)
+    const legacy = generateHomeLoad(clock, conditions)[index]!
+
+    expect(at73.hvacKwh).toBe(0)
+    expect(at80Occupied.hvacToRefrigeration).toBe(3.8572329263409113)
+    expect(at90Occupied.hvacToRefrigeration / at80Occupied.hvacToRefrigeration).toBeCloseTo(17 / 7, 12)
+    expect(at80Occupied.hvacToRefrigeration / at80Unoccupied.hvacToRefrigeration).toBeCloseTo(1 / 0.72, 12)
+    expect(legacy.kw).toBe(3.931129453533445)
   })
 
   it('keeps interval units and the full category breakdown internally consistent', () => {

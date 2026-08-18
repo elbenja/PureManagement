@@ -133,21 +133,45 @@ describe('annual generateHomeLoad', () => {
 
   it('increases HVAC monotonically as a controlled occupied interval gets colder', () => {
     const sourceIndex = clock.findIndex((slot) => slot.iso === '2026-01-15T07:00:00.000-08:00')
-    const oneClock = [{ ...clock[sourceIndex]!, index: 0 }]
     const base = { ...conditions[sourceIndex]!, occupied: true, cloudFactor: 0.8 }
-    const options: HomeLoadOptions = {
-      canonicalClock: oneClock,
-      seedId: LOS_ANGELES_2026.seedId,
-      monthlyTargetsKwh: [1],
-      includeHeating: true,
-    }
     const hvacShareAt = (temperatureF: number) => {
-      const point = generateHomeLoad(oneClock, [{ ...base, temperatureF }], options)[0]!
-      return point.breakdownKwh.hvac / point.kwh
+      const controlled = conditions.map((condition) => ({ ...condition }))
+      controlled[sourceIndex] = { ...base, temperatureF }
+      const point = generateHomeLoad(clock, controlled, annualOptions(clock))[sourceIndex]!
+      return point.breakdownKwh.hvac / point.breakdownKwh.refrigeration
     }
 
     expect(hvacShareAt(55)).toBeGreaterThan(hvacShareAt(64))
     expect(hvacShareAt(45)).toBeGreaterThan(hvacShareAt(55))
+  })
+
+  it('does not let a supplied canonical clock authorize its own corruption', () => {
+    const cases: { clock: ClockSlot[]; index: number }[] = []
+    const validFieldCorruption = clock.map((slot) => ({ ...slot }))
+    validFieldCorruption[42] = { ...validFieldCorruption[42]!, minuteOfDay: 215 }
+    cases.push({ clock: validFieldCorruption, index: 42 })
+
+    const swapped = clock.map((slot) => ({ ...slot }))
+    const firstSwappedSlot = swapped[100]!
+    swapped[100] = swapped[101]!
+    swapped[101] = firstSwappedSlot
+    cases.push({ clock: swapped, index: 100 })
+
+    const duplicated = clock.map((slot) => ({ ...slot }))
+    duplicated[200] = duplicated[199]!
+    cases.push({ clock: duplicated, index: 200 })
+
+    const dstIndex = clock.findIndex((slot) => slot.iso === '2026-03-08T03:00:00.000-07:00')
+    const dstCorruption = clock.map((slot) => ({ ...slot }))
+    dstCorruption[dstIndex] = { ...dstCorruption[dstIndex]!, utcOffset: '-08:00' }
+    cases.push({ clock: dstCorruption, index: dstIndex })
+
+    for (const testCase of cases) {
+      expect(() => generateHomeLoad(testCase.clock, conditions, {
+        ...annualOptions(testCase.clock),
+        canonicalClock: testCase.clock,
+      })).toThrow(`Canonical clock differs from approved annual clock at index ${testCase.index}`)
+    }
   })
 
   it('is deterministic and does not mutate its clock, conditions, or options', () => {
@@ -233,20 +257,12 @@ describe('annual generateHomeLoad', () => {
     expect(() => generateHomeLoad(clock, conditions, { ...annualOptions(clock), includeHeating: 1 as unknown as boolean })).toThrow('Invalid includeHeating option')
   })
 
-  it('rejects nonpositive raw totals and finite targets whose scale cannot produce finite points', () => {
-    expect(() => generateHomeLoad([], [], {
-      canonicalClock: [],
-      seedId: 'empty-raw-load',
-      monthlyTargetsKwh: [1],
-      includeHeating: false,
-    })).toThrow('Home raw load must be finite and positive')
-
-    const oneClock = [{ ...clock[0]!, index: 0 }]
-    expect(() => generateHomeLoad(oneClock, [{ ...conditions[0]!, temperatureF: 70 }], {
-      canonicalClock: oneClock,
-      seedId: 'unreachable-scale',
-      monthlyTargetsKwh: [Number.MAX_VALUE],
-      includeHeating: false,
+  it('rejects a finite target whose scale cannot produce positive points', () => {
+    const targets = LOS_ANGELES_2026.months.map((month) => month.homeTargetKwh)
+    targets[0] = Number.MIN_VALUE
+    expect(() => generateHomeLoad(clock, conditions, {
+      ...annualOptions(clock),
+      monthlyTargetsKwh: targets,
     })).toThrow('Home target unreachable')
   })
 })

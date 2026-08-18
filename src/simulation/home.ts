@@ -3,6 +3,7 @@ import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 import type { Condition } from './conditions'
 import { mulberry32, seedFromString } from './random'
 import { buildAugustClock } from './time'
+import { buildYearClock } from './yearClock'
 
 export interface HomeLoadPoint {
   kw: number
@@ -177,10 +178,28 @@ const defaultOptions = (): HomeLoadOptions => ({
   includeHeating: false,
 })
 
+let approvedAugustClock: readonly ClockSlot[] | undefined
+let approvedAnnualClock: readonly ClockSlot[] | undefined
+
+const approvedClockFor = (annualMode: boolean) => {
+  if (annualMode) {
+    approvedAnnualClock ??= buildYearClock()
+    return approvedAnnualClock
+  }
+  approvedAugustClock ??= buildAugustClock()
+  return approvedAugustClock
+}
+
+const isLegacyPatternMode = (options: HomeLoadOptions) =>
+  options.monthlyTargetsKwh.length === 1 &&
+  options.monthlyTargetsKwh[0] === LOS_ANGELES_AUGUST_2026.home.targetAugustKwh &&
+  options.seedId === LOS_ANGELES_AUGUST_2026.seedId &&
+  options.includeHeating === false
+
 const validateOptions = (
   clock: readonly ClockSlot[],
   options: HomeLoadOptions,
-) => {
+): readonly ClockSlot[] => {
   if (options === null || typeof options !== 'object' || Array.isArray(options)) {
     throw new Error('Invalid home options')
   }
@@ -212,6 +231,25 @@ const validateOptions = (
       throw new Error(`Invalid canonical clock slot shape at index ${index}`)
     }
   }
+
+  const annualMode = options.monthlyTargetsKwh.length === 12
+  const approvedCanonicalClock = approvedClockFor(annualMode)
+  if (options.canonicalClock.length !== approvedCanonicalClock.length) {
+    throw new Error(
+      `Canonical clock length mismatch: expected ${approvedCanonicalClock.length}, received ${options.canonicalClock.length}`,
+    )
+  }
+  for (let index = 0; index < approvedCanonicalClock.length; index += 1) {
+    const supplied = options.canonicalClock[index]!
+    const approved = approvedCanonicalClock[index]!
+    if (clockFields.some((field) => supplied[field] !== approved[field])) {
+      throw new Error(
+        `Canonical clock differs from approved ${annualMode ? 'annual' : 'August'} clock at index ${index}`,
+      )
+    }
+  }
+
+  return approvedCanonicalClock
 }
 
 const validateInputs = (
@@ -226,7 +264,7 @@ const validateInputs = (
     }
     throw new Error('Home input length mismatch')
   }
-  validateOptions(clock, options)
+  const approvedCanonicalClock = validateOptions(clock, options)
 
   for (let index = 0; index < clock.length; index += 1) {
     const slot = clock[index]
@@ -269,6 +307,10 @@ const validateInputs = (
           ? `Invalid clock slot at index ${index}`
           : `Clock differs from canonical clock at index ${index}`,
       )
+    }
+    const approved = approvedCanonicalClock[index]!
+    if (clockFields.some((field) => slot[field] !== approved[field])) {
+      throw new Error(`Clock differs from approved clock at index ${index}`)
     }
   }
 
@@ -326,16 +368,17 @@ export const generateHomeLoad = (
   }
   validateInputs(clock, conditions, options, legacyDefaults)
 
+  const legacyPatternMode = isLegacyPatternMode(options)
   const patterns = new Map<string, DailyPattern>()
   for (const slot of clock) {
-    const patternKey = legacyDefaults ? `${slot.day}` : `${slot.year}-${slot.month}-${slot.day}`
+    const patternKey = legacyPatternMode ? `${slot.day}` : `${slot.year}-${slot.month}-${slot.day}`
     if (!patterns.has(patternKey)) {
       patterns.set(patternKey, dailyPattern(patternKey, options.seedId))
     }
   }
 
   const rawBreakdowns = clock.map((slot, index) => {
-    const patternKey = legacyDefaults ? `${slot.day}` : `${slot.year}-${slot.month}-${slot.day}`
+    const patternKey = legacyPatternMode ? `${slot.day}` : `${slot.year}-${slot.month}-${slot.day}`
     return rawCategoryKw(slot, conditions[index]!, patterns.get(patternKey)!, options.includeHeating)
   })
   const annualTargets = options.monthlyTargetsKwh.length === 12
