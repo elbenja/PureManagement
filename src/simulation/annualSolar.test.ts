@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import type { ClockSlot } from '../domain/energy'
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { buildAnnualConditions } from './annualConditions'
-import { generateAnnualSolar, rawAnnualSolarKw } from './annualSolar'
+import { generateAnnualSolar } from './annualSolar'
 import type { Condition } from './conditions'
 import { buildYearClock } from './yearClock'
 
@@ -33,6 +33,10 @@ describe('generateAnnualSolar', () => {
     clock = buildYearClock()
     conditions = buildAnnualConditions(clock, LOS_ANGELES_2026.seedId)
     solar = generateAnnualSolar(clock, conditions)
+    clock.forEach(Object.freeze)
+    conditions.forEach(Object.freeze)
+    Object.freeze(clock)
+    Object.freeze(conditions)
   })
 
   it('generates a finite, capacity-bounded point for every annual interval', () => {
@@ -74,8 +78,8 @@ describe('generateAnnualSolar', () => {
     const summer = daylightWindow(pointAt(clock, '2026-06-15T12:00:00.000-07:00').slot)
 
     expect(summer.end - summer.start).toBeGreaterThan(winter.end - winter.start)
-    expect(rawAnnualSolarKw(pointAt(clock, '2026-06-15T06:30:00.000-07:00').slot, 1)).toBeGreaterThan(0)
-    expect(rawAnnualSolarKw(pointAt(clock, '2026-01-15T06:30:00.000-08:00').slot, 1)).toBe(0)
+    expect(solar[pointAt(clock, '2026-06-15T06:30:00.000-07:00').index]!.kw).toBeGreaterThan(0)
+    expect(solar[pointAt(clock, '2026-01-15T06:30:00.000-08:00').index]!.kw).toBe(0)
   })
 
   it('switches the DST-adjacent daylight window using the slot offset', () => {
@@ -84,10 +88,10 @@ describe('generateAnnualSolar', () => {
     const afterDstDark = pointAt(clock, '2026-03-08T07:05:00.000-07:00').slot
     const afterDstLight = pointAt(clock, '2026-03-08T07:10:00.000-07:00').slot
 
-    expect(rawAnnualSolarKw(beforeDstDark, 1)).toBe(0)
-    expect(rawAnnualSolarKw(beforeDstLight, 1)).toBeGreaterThan(0)
-    expect(rawAnnualSolarKw(afterDstDark, 1)).toBe(0)
-    expect(rawAnnualSolarKw(afterDstLight, 1)).toBeGreaterThan(0)
+    expect(solar[pointAt(clock, beforeDstDark.iso).index]!.kw).toBe(0)
+    expect(solar[pointAt(clock, beforeDstLight.iso).index]!.kw).toBeGreaterThan(0)
+    expect(solar[pointAt(clock, afterDstDark.iso).index]!.kw).toBe(0)
+    expect(solar[pointAt(clock, afterDstLight.iso).index]!.kw).toBeGreaterThan(0)
   })
 
   it('keeps month calibration isolated at configured calendar boundaries', () => {
@@ -106,11 +110,48 @@ describe('generateAnnualSolar', () => {
     expect(clock[september.index]!.month).toBe(9)
   })
 
-  it('reduces raw midday production for rainy conditions', () => {
-    const clear = pointAt(clock, '2026-06-15T12:55:00.000-07:00').slot
-    const rainy = pointAt(clock, '2026-01-15T11:55:00.000-08:00').slot
+  it('reduces same-slot midday production when cloud cover increases', () => {
+    const { index } = pointAt(clock, '2026-06-15T12:55:00.000-07:00')
+    const clearConditions = conditions.map((condition) => ({ ...condition, cloudFactor: 0.8 }))
+    const rainyConditions = clearConditions.map((condition) => ({ ...condition }))
+    clearConditions[index] = { ...clearConditions[index]!, cloudFactor: 0.95 }
+    rainyConditions[index] = { ...rainyConditions[index]!, cloudFactor: 0.35 }
 
-    expect(rawAnnualSolarKw(clear, 0.95)).toBeGreaterThan(rawAnnualSolarKw(rainy, 0.35))
+    expect(generateAnnualSolar(clock, clearConditions)[index]!.kw).toBeGreaterThan(
+      generateAnnualSolar(clock, rainyConditions)[index]!.kw,
+    )
+  })
+
+  it('calibrates through 8 kW clipping for a valid high-contrast condition series', () => {
+    const clippedConditions = conditions.map((condition, index) => ({
+      ...condition,
+      cloudFactor:
+        clock[index]!.minuteOfDay >= 10 * 60 && clock[index]!.minuteOfDay < 14 * 60 ? 1 : 0.05,
+    }))
+    const clippedSolar = generateAnnualSolar(clock, clippedConditions)
+    const januaryKwh = clippedSolar.reduce(
+      (total, point, index) => total + (clock[index]!.month === 1 ? point.kwh : 0),
+      0,
+    )
+
+    expect(clippedSolar.some((point) => point.kw === LOS_ANGELES_2026.solar.capacityKw)).toBe(true)
+    expect(januaryKwh).toBeCloseTo(LOS_ANGELES_2026.months[0]!.solarTargetKwh, 6)
+  })
+
+  it('calibrates valid tiny positive cloud factors without a false unreachable error', () => {
+    const tinyCloudConditions = conditions.map((condition) => ({
+      ...condition,
+      cloudFactor: 1e-20,
+    }))
+    const tinyCloudSolar = generateAnnualSolar(clock, tinyCloudConditions)
+
+    for (const month of LOS_ANGELES_2026.months) {
+      const total = tinyCloudSolar.reduce(
+        (sum, point, index) => sum + (clock[index]!.month === month.month ? point.kwh : 0),
+        0,
+      )
+      expect(total).toBeCloseTo(month.solarTargetKwh, 6)
+    }
   })
 
   it('is deterministic and leaves its inputs unchanged', () => {
@@ -128,6 +169,8 @@ describe('generateAnnualSolar', () => {
     const zeroCloud = conditions.map((condition) => ({ ...condition, cloudFactor: 0 }))
     const malformedConditions = conditions.map((condition) => ({ ...condition }))
     malformedConditions[42] = null as unknown as Condition
+    const sparseConditions = conditions.map((condition) => ({ ...condition }))
+    delete sparseConditions[43]
 
     expect(() => generateAnnualSolar(clock, conditions.slice(1))).toThrow('Solar input length mismatch')
     expect(() => generateAnnualSolar(nonCanonicalClock, conditions)).toThrow(
@@ -135,6 +178,7 @@ describe('generateAnnualSolar', () => {
     )
     expect(() => generateAnnualSolar(clock, zeroCloud)).toThrow('Solar target unreachable for month 1')
     expect(() => generateAnnualSolar(clock, malformedConditions)).toThrow('Invalid condition at index 42')
+    expect(() => generateAnnualSolar(clock, sparseConditions)).toThrow('Invalid condition at index 43')
 
     for (const cloudFactor of [Number.NaN, Number.POSITIVE_INFINITY, -0.01, 1.01]) {
       const invalidConditions = conditions.map((condition) => ({ ...condition }))

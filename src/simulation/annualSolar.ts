@@ -4,7 +4,6 @@ import type { Condition } from './conditions'
 import type { SolarPoint } from './solar'
 import { buildYearClock } from './yearClock'
 
-const MAX_SCALE_ITERATIONS = 64
 const intervalHours = LOS_ANGELES_2026.intervalMinutes / 60
 const capacityKw = LOS_ANGELES_2026.solar.capacityKw
 
@@ -47,7 +46,8 @@ const validCondition = (condition: unknown): condition is Condition => {
 }
 
 const assertConditions = (conditions: Condition[]) => {
-  conditions.forEach((condition, index) => {
+  for (let index = 0; index < conditions.length; index += 1) {
+    const condition = conditions[index]
     if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
       throw new Error(`Invalid condition at index ${index}`)
     }
@@ -59,7 +59,7 @@ const assertConditions = (conditions: Condition[]) => {
       throw new Error(`Invalid cloud factor at index ${index}`)
     }
     if (!validCondition(condition)) throw new Error(`Invalid condition at index ${index}`)
-  })
+  }
 }
 
 const daylightWindow = (slot: ClockSlot) => {
@@ -72,8 +72,7 @@ const daylightWindow = (slot: ClockSlot) => {
   }
 }
 
-/** @internal Test seam for the unscaled seasonal production curve. */
-export const rawAnnualSolarKw = (slot: ClockSlot, cloudFactor: number): number => {
+const rawSolarKw = (slot: ClockSlot, cloudFactor: number): number => {
   const { daylightStart, daylightEnd } = daylightWindow(slot)
   if (slot.minuteOfDay < daylightStart || slot.minuteOfDay >= daylightEnd) return 0
 
@@ -94,16 +93,15 @@ const scaleForTarget = (rawKw: number[], targetKwh: number, month: number) => {
 
   let lower = 0
   let upper = 1
-  for (let iteration = 0; iteration < MAX_SCALE_ITERATIONS; iteration += 1) {
-    if (energyAtScale(rawKw, upper) >= targetKwh) break
-    upper *= 2
+  while (energyAtScale(rawKw, upper) < targetKwh && upper < Number.MAX_VALUE) {
+    upper = Math.min(Number.MAX_VALUE, upper * 2)
   }
   if (energyAtScale(rawKw, upper) < targetKwh) {
     throw new Error(`Solar target unreachable for month ${month}`)
   }
 
   for (let iteration = 0; iteration < 60; iteration += 1) {
-    const middle = (lower + upper) / 2
+    const middle = lower + (upper - lower) / 2
     if (energyAtScale(rawKw, middle) < targetKwh) lower = middle
     else upper = middle
   }
@@ -118,14 +116,20 @@ export const generateAnnualSolar = (
   assertCanonicalClock(clock)
   assertConditions(conditions)
 
-  const rawKw = clock.map((slot, index) => rawAnnualSolarKw(slot, conditions[index]!.cloudFactor))
-  const scalesByMonth = new Map<number, number>()
+  const rawKw = clock.map((slot, index) => rawSolarKw(slot, conditions[index]!.cloudFactor))
+  const rawKwByMonth = new Map<number, number[]>()
+  for (const [index, kw] of rawKw.entries()) {
+    const month = clock[index]!.month
+    const monthlyRawKw = rawKwByMonth.get(month) ?? []
+    monthlyRawKw.push(kw)
+    rawKwByMonth.set(month, monthlyRawKw)
+  }
 
+  const scalesByMonth = new Map<number, number>()
   for (const profile of LOS_ANGELES_2026.months) {
-    const monthRawKw = rawKw.filter((_, index) => clock[index]!.month === profile.month)
     scalesByMonth.set(
       profile.month,
-      scaleForTarget(monthRawKw, profile.solarTargetKwh, profile.month),
+      scaleForTarget(rawKwByMonth.get(profile.month)!, profile.solarTargetKwh, profile.month),
     )
   }
 
