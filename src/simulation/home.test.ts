@@ -57,6 +57,7 @@ describe('generateHomeLoad', () => {
 
     expect(first).toHaveLength(8_928)
     expect(second).toEqual(first)
+    expect(first[0]!.kw).toBe(0.6805323992061951)
     expect(first.reduce((total, point) => total + point.kwh, 0)).toBeCloseTo(
       LOS_ANGELES_AUGUST_2026.home.targetAugustKwh,
       9,

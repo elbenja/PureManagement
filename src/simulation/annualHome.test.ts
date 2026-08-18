@@ -186,6 +186,17 @@ describe('annual generateHomeLoad', () => {
     malformedConditions[44] = null as unknown as Condition
     const sparseConditions = conditions.map((condition) => ({ ...condition }))
     delete sparseConditions[45]
+    const extraOptions = { ...annualOptions(clock), extra: true } as HomeLoadOptions
+    const missingOptions = { ...annualOptions(clock) } as Partial<HomeLoadOptions>
+    delete missingOptions.includeHeating
+    const extraClock = clock.map((slot) => ({ ...slot }))
+    extraClock[47] = { ...extraClock[47]!, extra: true } as ClockSlot
+    const missingClock = clock.map((slot) => ({ ...slot }))
+    delete (missingClock[48] as Partial<ClockSlot>).iso
+    const extraConditions = conditions.map((condition) => ({ ...condition }))
+    extraConditions[49] = { ...extraConditions[49]!, extra: true } as Condition
+    const missingConditions = conditions.map((condition) => ({ ...condition }))
+    delete (missingConditions[50] as Partial<Condition>).weatherState
 
     expect(() => generateHomeLoad(null as unknown as ClockSlot[], conditions, annualOptions(clock))).toThrow('Invalid home clock')
     expect(() => generateHomeLoad(clock, null as unknown as Condition[], annualOptions(clock))).toThrow('Invalid home conditions')
@@ -195,6 +206,12 @@ describe('annual generateHomeLoad', () => {
     expect(() => generateHomeLoad(clock, conditions, { ...annualOptions(clock), canonicalClock: sparseCanonical })).toThrow('Invalid canonical clock slot at index 43')
     expect(() => generateHomeLoad(clock, malformedConditions, annualOptions(clock))).toThrow('Invalid condition at index 44')
     expect(() => generateHomeLoad(clock, sparseConditions, annualOptions(clock))).toThrow('Invalid condition at index 45')
+    expect(() => generateHomeLoad(clock, conditions, extraOptions)).toThrow('Invalid home options shape')
+    expect(() => generateHomeLoad(clock, conditions, missingOptions as HomeLoadOptions)).toThrow('Invalid home options shape')
+    expect(() => generateHomeLoad(extraClock, conditions, annualOptions(clock))).toThrow('Invalid clock slot shape at index 47')
+    expect(() => generateHomeLoad(missingClock, conditions, annualOptions(clock))).toThrow('Invalid clock slot shape at index 48')
+    expect(() => generateHomeLoad(clock, extraConditions, annualOptions(clock))).toThrow('Invalid condition shape at index 49')
+    expect(() => generateHomeLoad(clock, missingConditions, annualOptions(clock))).toThrow('Invalid condition shape at index 50')
 
     for (const [field, value, error] of [
       ['temperatureF', -0.1, 'Invalid temperature at index 46'],

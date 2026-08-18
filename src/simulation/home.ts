@@ -143,8 +143,32 @@ const clockFields: (keyof ClockSlot)[] = [
   'utcOffset',
   'tou',
 ]
+const conditionFields: (keyof Condition)[] = [
+  'dayType',
+  'temperatureF',
+  'cloudFactor',
+  'weatherState',
+  'precipitationInches',
+  'occupied',
+]
+const optionFields: (keyof HomeLoadOptions)[] = [
+  'canonicalClock',
+  'seedId',
+  'monthlyTargetsKwh',
+  'includeHeating',
+]
 const dayTypes = new Set(['weekday', 'weekend', 'heatwave', 'cloudy'])
 const weatherStates = new Set(['clear', 'partly-cloudy', 'overcast', 'rain'])
+
+const hasExactEnumerableShape = (
+  value: object,
+  fields: readonly (string | symbol)[],
+) => {
+  const keys = Reflect.ownKeys(value).filter((key) =>
+    Object.prototype.propertyIsEnumerable.call(value, key),
+  )
+  return keys.length === fields.length && fields.every((field) => keys.includes(field))
+}
 
 const defaultOptions = (): HomeLoadOptions => ({
   canonicalClock: buildAugustClock(),
@@ -159,6 +183,9 @@ const validateOptions = (
 ) => {
   if (options === null || typeof options !== 'object' || Array.isArray(options)) {
     throw new Error('Invalid home options')
+  }
+  if (!hasExactEnumerableShape(options, optionFields)) {
+    throw new Error('Invalid home options shape')
   }
   if (!Array.isArray(options.canonicalClock)) throw new Error('Invalid canonical clock')
   if (options.canonicalClock.length !== clock.length) {
@@ -181,6 +208,9 @@ const validateOptions = (
     if (slot === null || typeof slot !== 'object' || Array.isArray(slot)) {
       throw new Error(`Invalid canonical clock slot at index ${index}`)
     }
+    if (!hasExactEnumerableShape(slot, clockFields)) {
+      throw new Error(`Invalid canonical clock slot shape at index ${index}`)
+    }
   }
 }
 
@@ -202,6 +232,9 @@ const validateInputs = (
     const slot = clock[index]
     if (slot === null || typeof slot !== 'object' || Array.isArray(slot)) {
       throw new Error(`Invalid clock slot at index ${index}`)
+    }
+    if (!hasExactEnumerableShape(slot, clockFields)) {
+      throw new Error(`Invalid clock slot shape at index ${index}`)
     }
     if (!Number.isFinite(slot.day) || !Number.isInteger(slot.day) || slot.day < 1 || slot.day > 31) {
       throw new Error(`Invalid clock day at index ${index}`)
@@ -243,6 +276,9 @@ const validateInputs = (
     const condition = conditions[index]
     if (condition === null || typeof condition !== 'object' || Array.isArray(condition)) {
       throw new Error(`Invalid condition at index ${index}`)
+    }
+    if (!hasExactEnumerableShape(condition, conditionFields)) {
+      throw new Error(`Invalid condition shape at index ${index}`)
     }
     if (
       !Number.isFinite(condition.temperatureF) ||
@@ -292,13 +328,15 @@ export const generateHomeLoad = (
 
   const patterns = new Map<string, DailyPattern>()
   for (const slot of clock) {
-    const dateKey = `${slot.year}-${slot.month}-${slot.day}`
-    if (!patterns.has(dateKey)) patterns.set(dateKey, dailyPattern(dateKey, options.seedId))
+    const patternKey = legacyDefaults ? `${slot.day}` : `${slot.year}-${slot.month}-${slot.day}`
+    if (!patterns.has(patternKey)) {
+      patterns.set(patternKey, dailyPattern(patternKey, options.seedId))
+    }
   }
 
   const rawBreakdowns = clock.map((slot, index) => {
-    const dateKey = `${slot.year}-${slot.month}-${slot.day}`
-    return rawCategoryKw(slot, conditions[index]!, patterns.get(dateKey)!, options.includeHeating)
+    const patternKey = legacyDefaults ? `${slot.day}` : `${slot.year}-${slot.month}-${slot.day}`
+    return rawCategoryKw(slot, conditions[index]!, patterns.get(patternKey)!, options.includeHeating)
   })
   const annualTargets = options.monthlyTargetsKwh.length === 12
   const rawTotals = new Map<number, number>()
