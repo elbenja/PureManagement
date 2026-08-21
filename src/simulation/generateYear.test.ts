@@ -1,6 +1,9 @@
+// @vitest-environment node
+
 import { beforeAll, describe, expect, it } from 'vitest'
-import type { EnergyInterval, LoadCategory } from '../domain/energy'
+import type { EnergyInterval, LoadCategory, Transfer } from '../domain/energy'
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
+import { accountInterval } from './accounting'
 import { aggregateIntervals } from './aggregate'
 import { __finalizeAnnualLedger, generateYear } from './generateYear'
 import * as annualValidation from './validateYear'
@@ -36,6 +39,53 @@ const validateWithoutThrowing = (records: readonly EnergyInterval[]) => {
   expect(() => { errors = validateYear(records) }).not.toThrow()
   expect(errors.length).toBeLessThanOrEqual(100)
   return errors.join('\n')
+}
+
+const applyCoherentLateNightDischarge = (records: EnergyInterval[]) => {
+  const index = records.length - 1
+  const record = records[index]!
+  expect(record.minuteOfDay).toBe(23 * 60 + 55)
+  expect(record.batterySocStartKwh).toBeGreaterThan(
+    scenario.battery.capacityKwh * scenario.battery.reservePercent / 100 + 0.1,
+  )
+  expect(record.gridImportKwh).toBeGreaterThan(0.1)
+  expect(record.evKwh).toBe(0)
+  const intervalHours = scenario.intervalMinutes / 60
+  const deliveredKwh = 0.05
+  const storedDischargeKwh = deliveredKwh / Math.sqrt(scenario.battery.roundTripEfficiency)
+  const dischargeLossKwh = storedDischargeKwh - deliveredKwh
+  const gridImportKwh = record.gridImportKwh - deliveredKwh
+  const accounting = accountInterval({
+    tou: record.tou,
+    homeKwh: record.homeKwh,
+    evKwh: record.evKwh,
+    gridImportKwh,
+    gridExportKwh: record.gridExportKwh,
+  }, scenario)
+
+  replace(records, index, {
+    batteryDischargeKw: storedDischargeKwh / intervalHours,
+    batteryDischargeKwh: storedDischargeKwh,
+    batterySocEndKwh: record.batterySocStartKwh - storedDischargeKwh,
+    dischargeLossKwh,
+    gridImportKw: gridImportKwh / intervalHours,
+    gridImportKwh,
+    transfers: [
+      {
+        source: 'battery',
+        destination: 'home',
+        kw: deliveredKwh / intervalHours,
+        kwh: deliveredKwh,
+      },
+      {
+        source: 'grid',
+        destination: 'home',
+        kw: gridImportKwh / intervalHours,
+        kwh: gridImportKwh,
+      },
+    ],
+    ...accounting,
+  })
 }
 
 describe('generateYear', () => {
@@ -258,7 +308,34 @@ describe('generateYear', () => {
     expect(errors).toMatch(/weatherState rain requires positive precipitation/i)
   })
 
-  it('rejects corrupted targets and missing required seasonal events', () => {
+  it('bounds transfer inspection and rejects oversized, sparse, and duplicate routes', () => {
+    const sourceIndex = records.findIndex((record) => record.transfers.length > 0)
+    const source = records[sourceIndex]!.transfers[0]!
+
+    const sparse = mutableArray(records)
+    const sparseTransfers = new Array<Transfer>(9)
+    sparseTransfers[0] = { ...source }
+    sparseTransfers[8] = { ...source }
+    replace(sparse, sourceIndex, { transfers: sparseTransfers })
+    for (let index = sourceIndex + 1; index <= sourceIndex + 100; index += 1) delete sparse[index]
+    const sparseErrors = validateWithoutThrowing(sparse)
+    expect(sparseErrors).toMatch(/transfer count exceeds canonical maximum 8/i)
+    expect(sparseErrors).toMatch(/sparse transfer at index 1/i)
+
+    const duplicated = mutableArray(records)
+    replace(duplicated, sourceIndex, {
+      transfers: Array.from({ length: 1_000 }, () => ({ ...source })),
+    })
+    for (let index = sourceIndex + 1; index <= sourceIndex + 100; index += 1) delete duplicated[index]
+    const startedAt = performance.now()
+    const duplicateErrors = validateWithoutThrowing(duplicated)
+    const elapsedMs = performance.now() - startedAt
+    expect(duplicateErrors).toMatch(/transfer count exceeds canonical maximum 8/i)
+    expect(duplicateErrors).toMatch(/duplicate source\/destination pair/i)
+    expect(elapsedMs).toBeLessThan(3_000)
+  }, 10_000)
+
+  it('rejects coherent 23:55 routing, corrupted targets, and false seasonal events', () => {
     const malformed = records.map((record) => {
       const winter = [12, 1, 2].includes(record.month)
       return {
@@ -270,20 +347,27 @@ describe('generateYear', () => {
       } as EnergyInterval
     })
     for (const day of [1, 2]) {
-      const rainIndex = malformed.findIndex((candidate) =>
-        candidate.month === 1 && candidate.day === day && candidate.minuteOfDay === 12 * 60,
+      const rainIndexes = malformed.flatMap((candidate, index) =>
+        candidate.month === 1 && candidate.day === day &&
+        candidate.minuteOfDay >= 12 * 60 && candidate.minuteOfDay < 13 * 60
+          ? [index]
+          : [],
       )
+      expect(rainIndexes).toHaveLength(12)
+      rainIndexes.forEach((rainIndex) => {
+        replace(malformed, rainIndex, { precipitationInches: 0.01, weatherState: 'rain' })
+      })
       const coldIndex = malformed.findIndex((candidate) =>
         candidate.month === 1 && candidate.day === day && candidate.minuteOfDay === 0,
       )
-      replace(malformed, rainIndex, { precipitationInches: 0.01, weatherState: 'rain' })
       replace(malformed, coldIndex, { temperatureF: 0 })
     }
     for (const day of [1, 2, 3]) {
-      const heatIndex = malformed.findIndex((candidate) =>
-        candidate.month === 7 && candidate.day === day && candidate.minuteOfDay === 12 * 60,
+      const heatIndexes = malformed.flatMap((candidate, index) =>
+        candidate.month === 7 && candidate.day === day ? [index] : [],
       )
-      replace(malformed, heatIndex, { dayType: 'heatwave' })
+      expect(heatIndexes).toHaveLength(288)
+      heatIndexes.forEach((heatIndex) => replace(malformed, heatIndex, { dayType: 'heatwave' }))
     }
     const record = malformed[400]!
     replace(malformed, 400, {
@@ -296,7 +380,9 @@ describe('generateYear', () => {
     })
     const tripIndex = malformed.findIndex((candidate) => candidate.tripKwh > 0)
     replace(malformed, tripIndex, { tripKwh: malformed[tripIndex]!.tripKwh + 0.01 })
+    applyCoherentLateNightDischarge(malformed)
     const errors = validateWithoutThrowing(malformed)
+    expect(errors).toMatch(/routing batteryDischargeKwh does not match canonical routing/i)
     expect(errors).toMatch(/month 1 home total does not match the configured target/i)
     expect(errors).toMatch(/annual EV trip total does not match the configured target/i)
     expect(errors).toMatch(/missing required winter multi-day rain/i)

@@ -41,6 +41,10 @@ const invariantTolerance = 1e-10
 const maximumTransferCount = 8
 const routingEpsilon = invariantTolerance / 100
 const maximumOmittedRouteKwh = maximumTransferCount * routingEpsilon
+const approvedRoutePairs = new Set([
+  'solar-home', 'solar-ev', 'solar-battery', 'solar-grid',
+  'battery-home', 'battery-ev', 'grid-home', 'grid-ev',
+])
 
 type LoadAllocation = { homeKwh: number; evKwh: number; remainingKwh: number }
 
@@ -128,11 +132,6 @@ const scenarioConstants = (scenario: RouterScenario): RouterConstants => {
 const nonNegative = (value: number) => (value <= routingEpsilon ? 0 : value)
 
 const closeEnough = (left: number, right: number) => Math.abs(left - right) <= invariantTolerance
-
-const transferTotal = (
-  transfers: Transfer[],
-  predicate: (transfer: Transfer) => boolean,
-) => transfers.filter(predicate).reduce((total, transfer) => total + transfer.kwh, 0)
 
 const allocateLoad = (availableKwh: number, homeKwh: number, evKwh: number): LoadAllocation => {
   const servedHomeKwh = nonNegative(Math.min(availableKwh, homeKwh))
@@ -229,10 +228,6 @@ const verifyResult = (
     result.gridExportKw,
     result.gridExportKwh,
   ]
-  const approvedPairs = new Set([
-    'solar-home', 'solar-ev', 'solar-battery', 'solar-grid',
-    'battery-home', 'battery-ev', 'grid-home', 'grid-ev',
-  ])
 
   if (!numericValues.every((value) => Number.isFinite(value) && value >= 0)) {
     throw new Error('Router invariant failed: non-negative finite result required')
@@ -250,17 +245,37 @@ const verifyResult = (
     throw new Error('Router invariant failed: simultaneous grid import and export')
   }
 
+  const transferTotals = {
+    solar: 0,
+    home: 0,
+    ev: 0,
+    gridImport: 0,
+    gridExport: 0,
+    batteryCharge: 0,
+    batteryDischarge: 0,
+  }
   result.transfers.forEach((transfer) => {
     if (
       !Number.isFinite(transfer.kwh) ||
       !Number.isFinite(transfer.kw) ||
       transfer.kwh <= 0 ||
       transfer.kw <= 0 ||
-      !approvedPairs.has(`${transfer.source}-${transfer.destination}`) ||
+      !approvedRoutePairs.has(`${transfer.source}-${transfer.destination}`) ||
       !closeEnough(transfer.kw, transfer.kwh / intervalHours)
     ) {
       throw new Error('Router invariant failed: invalid transfer')
     }
+    if (transfer.source === 'solar') transferTotals.solar += transfer.kwh
+    if (transfer.destination === 'home') transferTotals.home += transfer.kwh
+    if (transfer.destination === 'ev') transferTotals.ev += transfer.kwh
+    if (transfer.source === 'grid') transferTotals.gridImport += transfer.kwh
+    if (transfer.source === 'solar' && transfer.destination === 'grid') {
+      transferTotals.gridExport += transfer.kwh
+    }
+    if (transfer.source === 'solar' && transfer.destination === 'battery') {
+      transferTotals.batteryCharge += transfer.kwh
+    }
+    if (transfer.source === 'battery') transferTotals.batteryDischarge += transfer.kwh
   })
 
   const suppliedKwh = input.solarKwh + result.batteryDischargeKwh + result.gridImportKwh
@@ -276,43 +291,22 @@ const verifyResult = (
     throw new Error('Router invariant failed: energy is not conserved')
   }
 
-  const solarTransfersKwh = transferTotal(result.transfers, (transfer) => transfer.source === 'solar')
-  const homeTransfersKwh = transferTotal(result.transfers, (transfer) => transfer.destination === 'home')
-  const evTransfersKwh = transferTotal(result.transfers, (transfer) => transfer.destination === 'ev')
-  const gridImportTransfersKwh = transferTotal(result.transfers, (transfer) => transfer.source === 'grid')
-  const gridExportTransfersKwh = transferTotal(
-    result.transfers,
-    (transfer) => transfer.source === 'solar' && transfer.destination === 'grid',
-  )
-  const batteryChargeTransfersKwh = transferTotal(
-    result.transfers,
-    (transfer) => transfer.source === 'solar' && transfer.destination === 'battery',
-  )
-  const batteryDischargeTransfersKwh = transferTotal(
-    result.transfers,
-    (transfer) => transfer.source === 'battery',
-  )
-
   if (
-    !closeEnough(solarTransfersKwh, input.solarKwh) ||
-    !closeEnough(homeTransfersKwh, input.homeKwh) ||
-    !closeEnough(evTransfersKwh, input.evKwh) ||
-    !closeEnough(gridImportTransfersKwh, result.gridImportKwh) ||
-    !closeEnough(gridExportTransfersKwh, result.gridExportKwh) ||
-    !closeEnough(batteryChargeTransfersKwh, result.batteryChargeKwh + result.chargeLossKwh) ||
-    !closeEnough(batteryDischargeTransfersKwh, result.batteryDischargeKwh - result.dischargeLossKwh)
+    !closeEnough(transferTotals.solar, input.solarKwh) ||
+    !closeEnough(transferTotals.home, input.homeKwh) ||
+    !closeEnough(transferTotals.ev, input.evKwh) ||
+    !closeEnough(transferTotals.gridImport, result.gridImportKwh) ||
+    !closeEnough(transferTotals.gridExport, result.gridExportKwh) ||
+    !closeEnough(transferTotals.batteryCharge, result.batteryChargeKwh + result.chargeLossKwh) ||
+    !closeEnough(transferTotals.batteryDischarge, result.batteryDischargeKwh - result.dischargeLossKwh)
   ) {
     throw new Error('Router invariant failed: transfers do not reconcile')
   }
 
   if (
-    transferTotal(result.transfers, (transfer) => transfer.source === 'battery') / intervalHours >
+    transferTotals.batteryDischarge / intervalHours >
       scenario.battery.maxPowerKw + invariantTolerance ||
-    transferTotal(
-      result.transfers,
-      (transfer) => transfer.source === 'solar' && transfer.destination === 'battery',
-    ) /
-      intervalHours >
+    transferTotals.batteryCharge / intervalHours >
       scenario.battery.maxPowerKw + invariantTolerance
   ) {
     throw new Error('Router invariant failed: battery AC power limit exceeded')

@@ -9,12 +9,17 @@ import type {
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { accountInterval } from './accounting'
 import { aggregateIntervals, type EnergyTotals } from './aggregate'
+import { routeInterval, type RouterResult } from './router'
 import { buildYearClock } from './yearClock'
 
 const scenario = LOS_ANGELES_2026
 const tolerance = 1e-8
 const intervalHours = scenario.intervalMinutes / 60
 const maximumErrors = 100
+const maximumTransferCount = 8
+const minimumRainRunSlots = 72
+const minimumRainDayTotalInches = 0.1
+const minimumHeatwaveTemperatureDeltaF = 5
 const reserveKwh = scenario.battery.capacityKwh * scenario.battery.reservePercent / 100
 const initialBatteryKwh = scenario.battery.capacityKwh * scenario.battery.initialPercent / 100
 const initialVehicleKwh = scenario.ev.capacityKwh * scenario.ev.initialSocPercent / 100
@@ -61,6 +66,11 @@ const approvedTransfers = new Set([
   'solar-home', 'solar-ev', 'solar-battery', 'solar-grid',
   'battery-home', 'battery-ev', 'grid-home', 'grid-ev',
 ])
+const routedNumericFields: readonly (keyof Omit<RouterResult, 'transfers'>)[] = [
+  'batteryChargeKw', 'batteryChargeKwh', 'batteryDischargeKw', 'batteryDischargeKwh',
+  'batterySocEndKwh', 'chargeLossKwh', 'dischargeLossKwh', 'gridImportKw',
+  'gridImportKwh', 'gridExportKw', 'gridExportKwh',
+]
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -69,6 +79,9 @@ const hasExactShape = (value: object, fields: readonly (string | symbol)[]) => {
   const keys = Reflect.ownKeys(value)
   return keys.length === fields.length && fields.every((field) => keys.includes(field))
 }
+
+const hasOwn = (value: object, key: PropertyKey) =>
+  Object.prototype.hasOwnProperty.call(value, key)
 
 const closeEnough = (left: number, right: number) =>
   Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= tolerance
@@ -81,11 +94,6 @@ const daylightWindow = (slot: ClockSlot) => {
     end: solarNoonMinute + dayLengthHours * 30,
   }
 }
-
-const transferEnergy = (
-  transfers: readonly Transfer[],
-  predicate: (transfer: Transfer) => boolean,
-) => transfers.reduce((total, transfer) => total + (predicate(transfer) ? transfer.kwh : 0), 0)
 
 interface MonthlyTotals {
   solarKwh: number
@@ -102,6 +110,7 @@ interface DailySummary {
   heatwaveSlotCount: number
   currentPrecipitationRun: number
   maximumPrecipitationRun: number
+  totalPrecipitationInches: number
   maximumTemperatureF: number
   tripCount: number
 }
@@ -183,6 +192,7 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     heatwaveSlotCount: 0,
     currentPrecipitationRun: 0,
     maximumPrecipitationRun: 0,
+    totalPrecipitationInches: 0,
     maximumTemperatureF: Number.NEGATIVE_INFINITY,
     tripCount: 0,
   }))
@@ -378,28 +388,57 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     if (!Array.isArray(transferValue)) {
       error(`index ${index}: transfers must be an array`)
     } else {
-      let validTransfers = true
-      transferValue.forEach((value: unknown, transferIndex) => {
+      let validTransfers = transferValue.length <= maximumTransferCount
+      if (!validTransfers) {
+        error(`index ${index}: transfer count exceeds canonical maximum ${maximumTransferCount}`)
+      }
+      const seenTransferPairs = new Set<string>()
+      const routeTotals = {
+        solar: 0,
+        home: 0,
+        ev: 0,
+        gridImport: 0,
+        gridExport: 0,
+        batteryInput: 0,
+        batteryOutput: 0,
+      }
+      const inspectedTransferCount = Math.min(transferValue.length, maximumTransferCount)
+      for (let transferIndex = 0; transferIndex < inspectedTransferCount; transferIndex += 1) {
+        if (!hasOwn(transferValue, transferIndex)) {
+          error(`index ${index}: sparse transfer at index ${transferIndex}`)
+          validTransfers = false
+          continue
+        }
+        const value: unknown = transferValue[transferIndex]
         if (!isRecord(value)) {
           error(`index ${index}: transfer ${transferIndex} is missing or invalid`)
           validTransfers = false
-          return
+          continue
         }
         if (!hasExactShape(value, transferFields)) {
           error(`index ${index}: transfer ${transferIndex} has invalid shape`)
           validTransfers = false
         }
-        if (!approvedTransfers.has(`${String(value.source)}-${String(value.destination)}`)) {
+        const pair = `${String(value.source)}-${String(value.destination)}`
+        if (!approvedTransfers.has(pair)) {
           error(`index ${index}: transfer ${transferIndex} has an unapproved source/destination`)
           validTransfers = false
         }
+        if (seenTransferPairs.has(pair)) {
+          error(`index ${index}: transfer ${transferIndex} has a duplicate source/destination pair`)
+          validTransfers = false
+        }
+        seenTransferPairs.add(pair)
+        let numericTransferValid = true
         if (typeof value.kw !== 'number' || !Number.isFinite(value.kw) || value.kw <= 0) {
           error(`index ${index}: transfer ${transferIndex} kw must be finite and positive`)
           validTransfers = false
+          numericTransferValid = false
         }
         if (typeof value.kwh !== 'number' || !Number.isFinite(value.kwh) || value.kwh <= 0) {
           error(`index ${index}: transfer ${transferIndex} kwh must be finite and positive`)
           validTransfers = false
+          numericTransferValid = false
         }
         if (
           typeof value.kw === 'number' && typeof value.kwh === 'number' &&
@@ -407,44 +446,86 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
         ) {
           error(`index ${index}: transfer ${transferIndex} kW/kWh relation is invalid`)
           validTransfers = false
+          numericTransferValid = false
         }
-      })
+        if (numericTransferValid && approvedTransfers.has(pair)) {
+          const transfer = value as unknown as Transfer
+          if (transfer.source === 'solar') routeTotals.solar += transfer.kwh
+          if (transfer.destination === 'home') routeTotals.home += transfer.kwh
+          if (transfer.destination === 'ev') routeTotals.ev += transfer.kwh
+          if (transfer.source === 'grid') routeTotals.gridImport += transfer.kwh
+          if (transfer.source === 'solar' && transfer.destination === 'grid') {
+            routeTotals.gridExport += transfer.kwh
+          }
+          if (transfer.source === 'solar' && transfer.destination === 'battery') {
+            routeTotals.batteryInput += transfer.kwh
+          }
+          if (transfer.source === 'battery') routeTotals.batteryOutput += transfer.kwh
+        }
+      }
 
       if (validTransfers) {
-        const transfers = transferValue as Transfer[]
-        const solar = transferEnergy(transfers, (transfer) => transfer.source === 'solar')
-        const home = transferEnergy(transfers, (transfer) => transfer.destination === 'home')
-        const ev = transferEnergy(transfers, (transfer) => transfer.destination === 'ev')
-        const gridImport = transferEnergy(transfers, (transfer) => transfer.source === 'grid')
-        const gridExport = transferEnergy(
-          transfers,
-          (transfer) => transfer.source === 'solar' && transfer.destination === 'grid',
-        )
-        const batteryInput = transferEnergy(
-          transfers,
-          (transfer) => transfer.source === 'solar' && transfer.destination === 'battery',
-        )
-        const batteryOutput = transferEnergy(transfers, (transfer) => transfer.source === 'battery')
         ;[
-          ['solar source', solar, record.solarKwh],
-          ['home destination', home, record.homeKwh],
-          ['EV destination', ev, record.evKwh],
-          ['grid import', gridImport, record.gridImportKwh],
-          ['grid export', gridExport, record.gridExportKwh],
-          ['battery charge and loss', batteryInput, record.batteryChargeKwh + record.chargeLossKwh],
-          ['battery discharge and loss', batteryOutput, record.batteryDischargeKwh - record.dischargeLossKwh],
+          ['solar source', routeTotals.solar, record.solarKwh],
+          ['home destination', routeTotals.home, record.homeKwh],
+          ['EV destination', routeTotals.ev, record.evKwh],
+          ['grid import', routeTotals.gridImport, record.gridImportKwh],
+          ['grid export', routeTotals.gridExport, record.gridExportKwh],
+          ['battery charge and loss', routeTotals.batteryInput, record.batteryChargeKwh + record.chargeLossKwh],
+          ['battery discharge and loss', routeTotals.batteryOutput, record.batteryDischargeKwh - record.dischargeLossKwh],
         ].forEach(([name, actual, expectedValue]) => {
           if (!closeEnough(actual as number, expectedValue as number)) {
             error(`index ${index}: transfers do not reconcile ${name}`)
           }
         })
-        if (batteryInput / intervalHours > scenario.battery.maxPowerKw + tolerance) {
+        if (routeTotals.batteryInput / intervalHours > scenario.battery.maxPowerKw + tolerance) {
           error(`index ${index}: battery charge transfer exceeds the power limit`)
         }
-        if (batteryOutput / intervalHours > scenario.battery.maxPowerKw + tolerance) {
+        if (routeTotals.batteryOutput / intervalHours > scenario.battery.maxPowerKw + tolerance) {
           error(`index ${index}: battery discharge transfer exceeds the power limit`)
         }
       }
+    }
+
+    try {
+      const routed = routeInterval({
+        solarKwh: record.solarKwh,
+        homeKwh: record.homeKwh,
+        evKwh: record.evKwh,
+        batterySocKwh: record.batterySocStartKwh,
+        minuteOfDay: record.minuteOfDay,
+      }, scenario)
+      routedNumericFields.forEach((field) => {
+        if (!closeEnough(record[field], routed[field])) {
+          error(`index ${index}: routing ${field} does not match canonical routing`)
+        }
+      })
+      if (Array.isArray(transferValue)) {
+        if (transferValue.length !== routed.transfers.length) {
+          error(`index ${index}: routing transfer count does not match canonical routing`)
+        }
+        const comparisonCount = Math.min(
+          transferValue.length,
+          routed.transfers.length,
+          maximumTransferCount,
+        )
+        for (let transferIndex = 0; transferIndex < comparisonCount; transferIndex += 1) {
+          if (!hasOwn(transferValue, transferIndex)) continue
+          const actual: unknown = transferValue[transferIndex]
+          const expectedTransfer = routed.transfers[transferIndex]!
+          if (!isRecord(actual)) continue
+          if (
+            actual.source !== expectedTransfer.source ||
+            actual.destination !== expectedTransfer.destination ||
+            typeof actual.kw !== 'number' || !closeEnough(actual.kw, expectedTransfer.kw) ||
+            typeof actual.kwh !== 'number' || !closeEnough(actual.kwh, expectedTransfer.kwh)
+          ) {
+            error(`index ${index}: routing transfer ${transferIndex} does not match canonical routing`)
+          }
+        }
+      }
+    } catch {
+      error(`index ${index}: routing inputs are invalid`)
     }
 
     try {
@@ -483,6 +564,7 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
           day.maximumPrecipitationRun,
           day.currentPrecipitationRun,
         )
+        day.totalPrecipitationInches += record.precipitationInches
       } else {
         day.currentPrecipitationRun = 0
       }
@@ -544,7 +626,9 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
   if (!hasConsecutiveDays(
     days,
     2,
-    (day) => winter(day.month) && day.maximumPrecipitationRun >= 12,
+    (day) => winter(day.month) &&
+      day.maximumPrecipitationRun >= minimumRainRunSlots &&
+      day.totalPrecipitationInches >= minimumRainDayTotalInches,
   )) {
     error('annual conditions are missing required winter multi-day rain')
   }
@@ -552,7 +636,9 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     days,
     3,
     (day) => day.month >= 7 && day.month <= 9 &&
-      day.slotCount > 0 && day.heatwaveSlotCount === day.slotCount,
+      day.slotCount > 0 && day.heatwaveSlotCount === day.slotCount &&
+      day.maximumTemperatureF >=
+        scenario.months[day.month - 1]!.highF + minimumHeatwaveTemperatureDeltaF,
   )) {
     error('annual conditions are missing required summer heatwave')
   }
