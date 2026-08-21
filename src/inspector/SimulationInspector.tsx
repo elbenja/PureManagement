@@ -95,17 +95,25 @@ export const SimulationInspector = ({
           </div>
         </dl>
 
-        <div className="controls" aria-label="Playback controls">
+        <div className="controls" role="group" aria-label="Playback controls">
           <button type="button" onClick={simulation.play} disabled={simulation.isPlaying}>
             Play
           </button>
           <button type="button" onClick={simulation.pause} disabled={!simulation.isPlaying}>
             Pause
           </button>
-          <button type="button" onClick={() => simulation.jumpDay(-1)}>
+          <button
+            type="button"
+            onClick={() => simulation.jumpDay(-1)}
+            disabled={live.index === records[0]?.index}
+          >
             Previous day
           </button>
-          <button type="button" onClick={() => simulation.jumpDay(1)}>
+          <button
+            type="button"
+            onClick={() => simulation.jumpDay(1)}
+            disabled={live.index === records.at(-1)?.index}
+          >
             Next day
           </button>
         </div>
@@ -125,7 +133,7 @@ export const SimulationInspector = ({
 
       <section aria-labelledby="history-heading">
         <h2 id="history-heading">History</h2>
-        <div className="controls" aria-label="Time range">
+        <div className="controls" role="group" aria-label="Time range">
           {ranges.map(({ key, label }) => (
             <button
               key={key}
@@ -137,7 +145,7 @@ export const SimulationInspector = ({
             </button>
           ))}
         </div>
-        <div className="controls" aria-label="Period navigation">
+        <div className="controls" role="group" aria-label="Period navigation">
           <button
             type="button"
             onClick={simulation.previousPeriod}

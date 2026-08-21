@@ -54,6 +54,9 @@ describe('SimulationInspector', () => {
     expect(screen.getByRole('button', { name: 'Last 30 days' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Calendar month' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Year to date' })).toBeVisible()
+    expect(screen.getByRole('group', { name: 'Playback controls' })).toBeVisible()
+    expect(screen.getByRole('group', { name: 'Time range' })).toBeVisible()
+    expect(screen.getByRole('group', { name: 'Period navigation' })).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Last week' }))
 
@@ -66,6 +69,8 @@ describe('SimulationInspector', () => {
     renderInspector()
 
     expect(screen.getByText('Paused')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Previous day' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Next day' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Next period' })).toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Previous period' }))
@@ -80,6 +85,11 @@ describe('SimulationInspector', () => {
     fireEvent.change(screen.getByLabelText('Simulation interval'), {
       target: { value: '0' },
     })
+    expect(screen.getByLabelText('Simulation interval')).toHaveValue('0')
+    expect(screen.getByRole('button', { name: 'Previous day' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Next day' })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous day' }))
     expect(screen.getByLabelText('Simulation interval')).toHaveValue('0')
 
     fireEvent.click(screen.getByRole('button', { name: 'Play' }))
