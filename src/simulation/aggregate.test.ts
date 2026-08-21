@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { EnergyInterval } from '../domain/energy'
-import { aggregateIntervals, buildPrefixTotals, getTrailingWindow } from './aggregate'
+import { buildYearClock } from './yearClock'
+import {
+  aggregateIntervals,
+  buildPrefixTotals,
+  getRangeWindow,
+  getTrailingWindow,
+  rangeSlots,
+} from './aggregate'
 
 const interval = (overrides: Partial<EnergyInterval> = {}): EnergyInterval => ({
   index: 0,
@@ -209,5 +216,120 @@ describe('getTrailingWindow', () => {
 
   it.each([0, -1, 1.5, Number.NaN])('rejects invalid record count %s', (recordCount) => {
     expect(() => getTrailingWindow('24h', 0, recordCount)).toThrow(/invalid recordCount/i)
+  })
+})
+
+describe('getRangeWindow', () => {
+  const annualRecords = buildYearClock() as unknown as readonly EnergyInterval[]
+  const indexAt = (month: number, day: number, minuteOfDay: number) =>
+    annualRecords.findIndex((record) =>
+      record.month === month && record.day === day && record.minuteOfDay === minuteOfDay)
+
+  it('keeps exact fixed-duration slot counts including legacy 31d', () => {
+    expect(rangeSlots).toEqual({
+      '24h': 288,
+      '7d': 2_016,
+      '30d': 8_640,
+      '31d': 8_928,
+    })
+  })
+
+  it('returns exactly 30 trailing days at an arbitrary February 15 anchor', () => {
+    const anchor = indexAt(2, 15, 23 * 60 + 55)
+    const window = getRangeWindow(annualRecords, '30d', anchor)
+
+    expect(window.end - window.start + 1).toBe(8_640)
+    expect(annualRecords[window.start]).toMatchObject({ month: 1, day: 17, minuteOfDay: 0 })
+    expect(annualRecords[window.end]).toMatchObject({ month: 2, day: 15, minuteOfDay: 1_435 })
+  })
+
+  it('returns the full calendar month containing an arbitrary anchor including future records', () => {
+    const anchor = indexAt(2, 15, 12 * 60)
+    const window = getRangeWindow(annualRecords, 'month', anchor)
+
+    expect(window.end - window.start + 1).toBe(8_064)
+    expect(annualRecords[window.start]).toMatchObject({ month: 2, day: 1, minuteOfDay: 0 })
+    expect(annualRecords[window.end]).toMatchObject({ month: 2, day: 28, minuteOfDay: 1_435 })
+    expect(window).toMatchObject({
+      previousAnchor: window.start - 1,
+      nextAnchor: window.end + 1,
+    })
+  })
+
+  it('derives daylight-saving calendar month sizes from the records', () => {
+    const march = getRangeWindow(annualRecords, 'month', indexAt(3, 15, 12 * 60))
+    const november = getRangeWindow(annualRecords, 'month', indexAt(11, 15, 12 * 60))
+
+    expect(march.end - march.start + 1).toBe(8_916)
+    expect(november.end - november.start + 1).toBe(8_652)
+  })
+
+  it('finds every calendar month boundary and limits navigation at year edges', () => {
+    for (let month = 1; month <= 12; month += 1) {
+      const anchor = annualRecords.findIndex((record) => record.month === month && record.day === 15)
+      const window = getRangeWindow(annualRecords, 'month', anchor)
+
+      expect(annualRecords[window.start]!.month).toBe(month)
+      expect(annualRecords[window.start]!.day).toBe(1)
+      expect(annualRecords[window.end]!.month).toBe(month)
+      expect(annualRecords[window.end + 1]?.month).not.toBe(month)
+      expect(window.previousAnchor).toBe(month === 1 ? null : window.start - 1)
+      expect(window.nextAnchor).toBe(month === 12 ? null : window.end + 1)
+    }
+  })
+
+  it('returns year-to-date through the anchor without period navigation', () => {
+    const anchor = indexAt(9, 8, 10 * 60)
+
+    expect(getRangeWindow(annualRecords, 'ytd', anchor)).toEqual({
+      start: 0,
+      end: anchor,
+      previousAnchor: null,
+      nextAnchor: null,
+    })
+  })
+
+  it('supports partial initial fixed windows and full-period navigation anchors', () => {
+    expect(getRangeWindow(annualRecords, '30d', 100)).toEqual({
+      start: 0,
+      end: 100,
+      previousAnchor: null,
+      nextAnchor: 8_740,
+    })
+
+    expect(getRangeWindow(annualRecords, '24h', 575)).toEqual({
+      start: 288,
+      end: 575,
+      previousAnchor: 287,
+      nextAnchor: 863,
+    })
+    expect(getRangeWindow(annualRecords, '24h', 574).previousAnchor).toBeNull()
+  })
+
+  it('rejects empty, unknown, out-of-bounds, and non-integer inputs', () => {
+    expect(() => getRangeWindow([], '24h', 0)).toThrow(/records/i)
+    expect(() => getRangeWindow(annualRecords, 'bogus' as '24h', 0)).toThrow(/range/i)
+    expect(() => getRangeWindow(annualRecords, '24h', -1)).toThrow(/anchor/i)
+    expect(() => getRangeWindow(annualRecords, '24h', annualRecords.length)).toThrow(/anchor/i)
+    expect(() => getRangeWindow(annualRecords, '24h', 1.5)).toThrow(/anchor/i)
+  })
+
+  it.each([
+    ['index', { index: 1 }],
+    ['year', { year: Number.NaN }],
+    ['month', { month: 13 }],
+    ['day', { day: 0 }],
+  ] as const)('rejects malformed canonical %s fields', (_field, overrides) => {
+    expect(() => getRangeWindow([interval(overrides)], 'month', 0)).toThrow(/record 0/i)
+  })
+
+  it('does not mutate records while resolving a range', () => {
+    const source = annualRecords.slice()
+    const before = source.slice()
+
+    getRangeWindow(source, 'month', indexAt(8, 15, 12 * 60))
+
+    expect(source).toEqual(before)
+    expect(source.every((record, index) => record === before[index])).toBe(true)
   })
 })

@@ -17,18 +17,31 @@ export interface EnergyTotals {
   avoidedCo2Kg: number
 }
 
-export type TimeRange = '24h' | '7d' | '31d'
+export type TimeRange = '24h' | '7d' | '30d' | '31d' | 'month' | 'ytd'
 
 const intervalMinutes = LOS_ANGELES_AUGUST_2026.intervalMinutes
 
 export const rangeSlots = {
   '24h': (24 * 60) / intervalMinutes,
   '7d': (7 * 24 * 60) / intervalMinutes,
+  '30d': (30 * 24 * 60) / intervalMinutes,
   '31d': LOS_ANGELES_AUGUST_2026.records,
 } as const
 
+type FixedTimeRange = keyof typeof rangeSlots
+
+const isFixedTimeRange = (value: unknown): value is FixedTimeRange =>
+  value === '24h' || value === '7d' || value === '30d' || value === '31d'
+
 const isTimeRange = (value: unknown): value is TimeRange =>
-  value === '24h' || value === '7d' || value === '31d'
+  isFixedTimeRange(value) || value === 'month' || value === 'ytd'
+
+export interface RangeWindow {
+  start: number
+  end: number
+  previousAnchor: number | null
+  nextAnchor: number | null
+}
 
 const zeroTotals = (): EnergyTotals => ({
   solarKwh: 0,
@@ -150,7 +163,7 @@ export const getTrailingWindow = (
   anchorIndex: number,
   recordCount: number,
 ) => {
-  if (!isTimeRange(range)) throw new Error('Invalid range')
+  if (!isFixedTimeRange(range)) throw new Error('Invalid range')
   if (!Number.isInteger(recordCount) || recordCount <= 0) {
     throw new Error('Invalid recordCount')
   }
@@ -166,5 +179,78 @@ export const getTrailingWindow = (
     end,
     canGoPrevious: start >= rangeSlots[range],
     canGoNext: end + rangeSlots[range] < recordCount,
+  }
+}
+
+export const getRangeWindow = (
+  records: readonly EnergyInterval[],
+  range: TimeRange,
+  anchorIndex: number,
+): RangeWindow => {
+  if (records.length === 0) throw new Error('Invalid records')
+  if (!isTimeRange(range)) throw new Error('Invalid range')
+  if (!Number.isInteger(anchorIndex) || anchorIndex < 0 || anchorIndex >= records.length) {
+    throw new Error('Invalid anchorIndex')
+  }
+
+  let previousDate = Number.NEGATIVE_INFINITY
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]
+    if (record === undefined || record.index !== index) {
+      throw new Error(`Record ${index} contains an invalid canonical index`)
+    }
+    if (
+      !Number.isInteger(record.year) || record.year < 1 ||
+      !Number.isInteger(record.month) || record.month < 1 || record.month > 12 ||
+      !Number.isInteger(record.day) || record.day < 1 ||
+      record.day > new Date(Date.UTC(record.year, record.month, 0)).getUTCDate()
+    ) {
+      throw new Error(`Record ${index} contains invalid calendar fields`)
+    }
+
+    const date = Date.UTC(record.year, record.month - 1, record.day)
+    if (date < previousDate) {
+      throw new Error(`Record ${index} contains out-of-order calendar fields`)
+    }
+    previousDate = date
+  }
+
+  const end = anchorIndex
+  if (isFixedTimeRange(range)) {
+    const slots = rangeSlots[range]
+    return {
+      start: Math.max(0, end - slots + 1),
+      end,
+      previousAnchor: end >= slots * 2 - 1 ? end - slots : null,
+      nextAnchor: end + slots < records.length ? end + slots : null,
+    }
+  }
+
+  const anchor = records[anchorIndex]!
+  let start = anchorIndex
+
+  if (range === 'ytd') {
+    while (start > 0 && records[start - 1]!.year === anchor.year) start -= 1
+    return { start, end, previousAnchor: null, nextAnchor: null }
+  }
+
+  while (
+    start > 0 &&
+    records[start - 1]!.year === anchor.year &&
+    records[start - 1]!.month === anchor.month
+  ) start -= 1
+
+  let monthEnd = anchorIndex
+  while (
+    monthEnd + 1 < records.length &&
+    records[monthEnd + 1]!.year === anchor.year &&
+    records[monthEnd + 1]!.month === anchor.month
+  ) monthEnd += 1
+
+  return {
+    start,
+    end: monthEnd,
+    previousAnchor: start > 0 ? start - 1 : null,
+    nextAnchor: monthEnd + 1 < records.length ? monthEnd + 1 : null,
   }
 }

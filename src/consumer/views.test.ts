@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
+import type { EnergyInterval } from '../domain/energy'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 import { generateMonth } from '../simulation/generateMonth'
-import { rangeSlots } from '../simulation/aggregate'
+import { generateYear } from '../simulation/generateYear'
+import { aggregateIntervals, rangeSlots } from '../simulation/aggregate'
 import { getHistoryView, getLiveFrame } from './views'
 
 const batteryTransferKw = (
@@ -28,6 +30,8 @@ describe('component-ready views', () => {
       conditions: {
         temperatureF: records[144]!.temperatureF,
         cloudFactor: records[144]!.cloudFactor,
+        weatherState: records[144]!.weatherState,
+        precipitationInches: records[144]!.precipitationInches,
       },
     })
     expect(frame!.nodes.map((node) => node.id)).toEqual([
@@ -75,6 +79,8 @@ describe('component-ready views', () => {
     expect(frame.appliancesKwh).toEqual(record.homeBreakdownKwh)
     expect(frame.accounting.savingsUsd).toBe(record.savings)
     expect(frame.transfers).toEqual(record.transfers)
+    expect(frame.conditions.weatherState).toBe(record.weatherState)
+    expect(frame.conditions.precipitationInches).toBe(record.precipitationInches)
   })
 
   it('interpolates battery display power from canonical AC-side transfers', () => {
@@ -228,5 +234,118 @@ describe('component-ready views', () => {
 
     expect(source).toEqual(before)
     expect(source.every((record, index) => record === before[index])).toBe(true)
+  })
+})
+
+describe('annual history views', () => {
+  let records: readonly EnergyInterval[]
+
+  beforeAll(() => {
+    records = generateYear()
+  })
+
+  const indexAt = (month: number, day: number, minuteOfDay: number) =>
+    records.findIndex((record) =>
+      record.month === month && record.day === day && record.minuteOfDay === minuteOfDay)
+
+  it.each([
+    ['24h', 'Last 24h'],
+    ['7d', 'Last week'],
+    ['30d', 'Last 30 days'],
+    ['31d', 'Last month'],
+    ['month', 'Calendar month'],
+    ['ytd', 'Year to date'],
+  ] as const)('labels %s as %s', (range, label) => {
+    expect(getHistoryView(records, range, indexAt(8, 15, 12 * 60))!.range.label).toBe(label)
+  })
+
+  it('selects annual 30d, calendar-month, and year-to-date records with exact totals', () => {
+    const anchor = indexAt(2, 15, 23 * 60 + 55)
+    const trailing = getHistoryView(records, '30d', anchor)!
+    const month = getHistoryView(records, 'month', anchor)!
+    const ytd = getHistoryView(records, 'ytd', anchor)!
+
+    expect(trailing.records).toHaveLength(8_640)
+    expect(month.records).toHaveLength(8_064)
+    expect(ytd.records).toHaveLength(anchor + 1)
+    for (const view of [trailing, month, ytd]) {
+      expect(view.totals).toEqual(aggregateIntervals(view.records))
+    }
+    expect(month.range).toMatchObject({
+      startIndex: month.records[0]!.index,
+      endIndex: month.records.at(-1)!.index,
+      previousAnchor: month.records[0]!.index - 1,
+      nextAnchor: month.records.at(-1)!.index + 1,
+      canGoPrevious: true,
+      canGoNext: true,
+    })
+    expect(ytd.range).toMatchObject({
+      previousAnchor: null,
+      nextAnchor: null,
+      canGoPrevious: false,
+      canGoNext: false,
+    })
+  })
+
+  it('samples long ranges into deterministic final-stamped average buckets', () => {
+    const anchor = indexAt(2, 15, 23 * 60 + 55)
+    const first = getHistoryView(records, '30d', anchor)!
+    const second = getHistoryView(records, '30d', anchor)!
+    const step = Math.ceil(first.records.length / 2_048)
+    const firstBucket = first.records.slice(0, step)
+    const average = (select: (record: EnergyInterval) => number) =>
+      firstBucket.reduce((total, record) => total + select(record), 0) / firstBucket.length
+
+    expect(first.series.length).toBeLessThanOrEqual(2_048)
+    expect(first.series).toEqual(second.series)
+    expect(first.series[0]).toEqual({
+      index: firstBucket.at(-1)!.index,
+      timestamp: firstBucket.at(-1)!.iso,
+      solarKw: average((record) => record.solarKw),
+      homeKw: average((record) => record.homeKw),
+      evKw: average((record) => record.evKw),
+      batteryNetKw: average((record) =>
+        batteryTransferKw(record, 'outgoing') - batteryTransferKw(record, 'incoming')),
+      gridImportKw: average((record) => record.gridImportKw),
+      gridExportKw: average((record) => record.gridExportKw),
+    })
+    expect(first.series.at(-1)).toMatchObject({
+      index: first.records.at(-1)!.index,
+      timestamp: first.records.at(-1)!.iso,
+    })
+  })
+
+  it('keeps the legacy August 7d series raw', () => {
+    const august = generateMonth()
+    const view = getHistoryView(august, '7d', august.length - 1)!
+
+    expect(view.records).toHaveLength(2_016)
+    expect(view.series).toHaveLength(2_016)
+    expect(view.series.map((point) => point.index)).toEqual(view.records.map((record) => record.index))
+  })
+
+  it('rejects malformed annual history records', () => {
+    const malformed = records.slice(0, 10).map((record) => ({ ...record }))
+    malformed[5]!.index = 4
+
+    expect(() => getHistoryView(malformed, 'month', 5)).toThrow(/record 5/i)
+  })
+
+  it('rejects non-finite chart inputs instead of returning malformed series', () => {
+    const malformed = records.slice(0, 10).map((record) => ({ ...record }))
+    malformed[5]!.solarKw = Number.NaN
+
+    expect(() => getHistoryView(malformed, '24h', 9)).toThrow(/record 5.*history/i)
+  })
+
+  it('does not mutate annual records while selecting and sampling', () => {
+    const before = records.slice()
+
+    getHistoryView(records, '30d', indexAt(8, 15, 12 * 60))
+    getHistoryView(records, 'month', indexAt(3, 15, 12 * 60))
+    getHistoryView(records, 'ytd', records.length - 1)
+
+    expect(records).toEqual(before)
+    expect(records.every((record, index) => record === before[index])).toBe(true)
   })
 })

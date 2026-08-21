@@ -4,11 +4,12 @@ import type {
   LoadCategory,
   TouPeriod,
   Transfer,
+  WeatherState,
 } from '../domain/energy'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 import {
   aggregateIntervals,
-  getTrailingWindow,
+  getRangeWindow,
   type EnergyTotals,
   type TimeRange,
 } from '../simulation/aggregate'
@@ -90,6 +91,8 @@ export interface LiveFrame {
   conditions: {
     temperatureF: number
     cloudFactor: number
+    weatherState: WeatherState
+    precipitationInches: number
   }
   nodes: [
     SolarNodeView,
@@ -106,11 +109,19 @@ export interface LiveFrame {
 
 export interface HistoryRangeView {
   key: TimeRange
-  label: 'Last 24h' | 'Last week' | 'Last month'
+  label:
+    | 'Last 24h'
+    | 'Last week'
+    | 'Last 30 days'
+    | 'Last month'
+    | 'Calendar month'
+    | 'Year to date'
   startIndex: number
   endIndex: number
   startTimestamp: string
   endTimestamp: string
+  previousAnchor: number | null
+  nextAnchor: number | null
   canGoPrevious: boolean
   canGoNext: boolean
 }
@@ -137,7 +148,10 @@ export interface HistoryView {
 const rangeLabels: Record<TimeRange, HistoryRangeView['label']> = {
   '24h': 'Last 24h',
   '7d': 'Last week',
+  '30d': 'Last 30 days',
   '31d': 'Last month',
+  month: 'Calendar month',
+  ytd: 'Year to date',
 }
 
 const clampIndex = (index: number, recordCount: number): number => {
@@ -169,6 +183,67 @@ const batteryTransferKw = (
     ? transfer.destination === 'battery'
     : transfer.source === 'battery')
   .reduce((total, transfer) => total + transfer.kw, 0)
+
+const validateHistoryRecord = (record: EnergyInterval, index: number) => {
+  const powerValues = [
+    record.solarKw,
+    record.homeKw,
+    record.evKw,
+    record.gridImportKw,
+    record.gridExportKw,
+  ]
+  if (
+    powerValues.some((value) => !Number.isFinite(value) || value < 0) ||
+    !Array.isArray(record.transfers) ||
+    record.transfers.some((transfer) => !Number.isFinite(transfer.kw) || transfer.kw < 0)
+  ) {
+    throw new Error(`Record ${index} contains invalid history values`)
+  }
+}
+
+const buildHistorySeries = (
+  records: readonly EnergyInterval[],
+): HistorySeriesPoint[] => {
+  const step = Math.ceil(records.length / 2_048)
+  const series: HistorySeriesPoint[] = []
+
+  for (let start = 0; start < records.length; start += step) {
+    const end = Math.min(records.length, start + step)
+    const finalRecord = records[end - 1]!
+    let solarKw = 0
+    let homeKw = 0
+    let evKw = 0
+    let batteryNetKw = 0
+    let gridImportKw = 0
+    let gridExportKw = 0
+
+    for (let index = start; index < end; index += 1) {
+      const record = records[index]!
+      validateHistoryRecord(record, record.index)
+      solarKw += record.solarKw
+      homeKw += record.homeKw
+      evKw += record.evKw
+      batteryNetKw +=
+        batteryTransferKw(record, 'outgoing') - batteryTransferKw(record, 'incoming')
+      gridImportKw += record.gridImportKw
+      gridExportKw += record.gridExportKw
+    }
+
+    const count = end - start
+    series.push({
+      index: finalRecord.index,
+      timestamp: finalRecord.iso,
+      solarKw: solarKw / count,
+      homeKw: homeKw / count,
+      evKw: evKw / count,
+      batteryNetKw: batteryNetKw / count,
+      gridImportKw: gridImportKw / count,
+      gridExportKw: gridExportKw / count,
+    })
+  }
+
+  return series
+}
 
 export const getLiveFrame = (
   records: readonly EnergyInterval[],
@@ -226,6 +301,8 @@ export const getLiveFrame = (
     conditions: {
       temperatureF: record.temperatureF,
       cloudFactor: record.cloudFactor,
+      weatherState: record.weatherState,
+      precipitationInches: record.precipitationInches,
     },
     nodes: [
       {
@@ -299,7 +376,7 @@ export const getHistoryView = (
   if (records.length === 0) return null
 
   const anchor = clampIndex(anchorIndex, records.length)
-  const window = getTrailingWindow(range, anchor, records.length)
+  const window = getRangeWindow(records, range, anchor)
   const selectedRecords = records.slice(window.start, window.end + 1)
   const startRecord = selectedRecords[0]!
   const endRecord = selectedRecords[selectedRecords.length - 1]!
@@ -313,21 +390,12 @@ export const getHistoryView = (
       endIndex: endRecord.index,
       startTimestamp: startRecord.iso,
       endTimestamp: endRecord.iso,
-      canGoPrevious: window.canGoPrevious,
-      canGoNext: window.canGoNext,
+      previousAnchor: window.previousAnchor,
+      nextAnchor: window.nextAnchor,
+      canGoPrevious: window.previousAnchor !== null,
+      canGoNext: window.nextAnchor !== null,
     },
     totals: aggregateIntervals(selectedRecords),
-    series: selectedRecords.map((record) => ({
-      index: record.index,
-      timestamp: record.iso,
-      solarKw: record.solarKw,
-      homeKw: record.homeKw,
-      evKw: record.evKw,
-      batteryNetKw:
-        batteryTransferKw(record, 'outgoing') -
-        batteryTransferKw(record, 'incoming'),
-      gridImportKw: record.gridImportKw,
-      gridExportKw: record.gridExportKw,
-    })),
+    series: buildHistorySeries(selectedRecords),
   }
 }
