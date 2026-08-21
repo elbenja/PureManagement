@@ -3,7 +3,9 @@ import type { EnergyInterval, LoadCategory } from '../domain/energy'
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { aggregateIntervals } from './aggregate'
 import { __finalizeAnnualLedger, generateYear } from './generateYear'
-import { validateYear } from './validateYear'
+import * as annualValidation from './validateYear'
+
+const validateYear = annualValidation.validateYear
 
 const scenario = LOS_ANGELES_2026
 const tolerance = 1e-8
@@ -218,8 +220,12 @@ describe('generateYear', () => {
     replace(malformed, importing, { gridExportKw: 0.12, gridExportKwh: 0.01 })
     const midnight = malformed.findIndex((record) => record.minuteOfDay === 0)
     replace(malformed, midnight, { solarKw: 0.12, solarKwh: 0.01 })
-    const away = malformed.findIndex((record) => !record.evAvailable && record.evKwh === 0)
+    const away = malformed.findIndex((record) =>
+      !record.evAvailable && record.evKwh === 0 && record.tripKwh === 0,
+    )
     replace(malformed, away, { evKw: 12e-12, evKwh: 1e-12 })
+    const departure = malformed.findIndex((record) => record.tripKwh > 0)
+    replace(malformed, departure, { evAvailable: true })
     for (let index = 302; index < 402; index += 1) delete malformed[index]
 
     const errors = validateWithoutThrowing(malformed)
@@ -237,7 +243,19 @@ describe('generateYear', () => {
       /simultaneous grid import and export/i,
       /solar must be zero outside the annual daylight window/i,
       /EV cannot charge while away/i,
+      /EV trip requires the vehicle to be unavailable/i,
     ].forEach((pattern) => expect(errors).toMatch(pattern))
+  })
+
+  it('requires rain labels and positive precipitation to agree in both directions', () => {
+    const malformed = mutableArray(records)
+    replace(malformed, 0, { precipitationInches: 0.01, weatherState: 'overcast' })
+    replace(malformed, 1, { precipitationInches: 0, weatherState: 'rain' })
+    for (let index = 2; index < 102; index += 1) delete malformed[index]
+    const errors = validateWithoutThrowing(malformed)
+
+    expect(errors).toMatch(/positive precipitation requires weatherState rain/i)
+    expect(errors).toMatch(/weatherState rain requires positive precipitation/i)
   })
 
   it('rejects corrupted targets and missing required seasonal events', () => {
@@ -251,6 +269,22 @@ describe('generateYear', () => {
         dayType: record.dayType === 'heatwave' ? 'weekday' : record.dayType,
       } as EnergyInterval
     })
+    for (const day of [1, 2]) {
+      const rainIndex = malformed.findIndex((candidate) =>
+        candidate.month === 1 && candidate.day === day && candidate.minuteOfDay === 12 * 60,
+      )
+      const coldIndex = malformed.findIndex((candidate) =>
+        candidate.month === 1 && candidate.day === day && candidate.minuteOfDay === 0,
+      )
+      replace(malformed, rainIndex, { precipitationInches: 0.01, weatherState: 'rain' })
+      replace(malformed, coldIndex, { temperatureF: 0 })
+    }
+    for (const day of [1, 2, 3]) {
+      const heatIndex = malformed.findIndex((candidate) =>
+        candidate.month === 7 && candidate.day === day && candidate.minuteOfDay === 12 * 60,
+      )
+      replace(malformed, heatIndex, { dayType: 'heatwave' })
+    }
     const record = malformed[400]!
     replace(malformed, 400, {
       homeKw: record.homeKw + 0.12,
@@ -268,6 +302,20 @@ describe('generateYear', () => {
     expect(errors).toMatch(/missing required winter multi-day rain/i)
     expect(errors).toMatch(/missing required summer heatwave/i)
     expect(errors).toMatch(/missing required winter cold snap/i)
+  })
+
+  it('reports an annual solar reference error independently from monthly checks', () => {
+    expect(annualValidation).toHaveProperty('__annualSolarTotalError')
+    const annualSolarTotalError = (
+      annualValidation as typeof annualValidation & {
+        __annualSolarTotalError: (solarKwh: number) => string | null
+      }
+    ).__annualSolarTotalError
+
+    expect(annualSolarTotalError(scenario.solar.annualReferenceKwh)).toBeNull()
+    expect(annualSolarTotalError(scenario.solar.annualReferenceKwh * 1.03)).toMatch(
+      /annual solar total is outside the ±2% reference envelope/i,
+    )
   })
 
   it('throws one prefixed error and exposes no partial ledger when final validation fails', () => {

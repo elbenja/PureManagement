@@ -97,9 +97,12 @@ interface MonthlyTotals {
 interface DailySummary {
   dayOfYear: number
   month: number
-  rain: boolean
-  heatwave: boolean
-  minimumTemperatureF: number
+  day: number
+  slotCount: number
+  heatwaveSlotCount: number
+  currentPrecipitationRun: number
+  maximumPrecipitationRun: number
+  maximumTemperatureF: number
   tripCount: number
 }
 
@@ -148,6 +151,13 @@ const hasConsecutiveDays = (
   return false
 }
 
+export const __annualSolarTotalError = (solarKwh: number): string | null => {
+  const target = scenario.solar.annualReferenceKwh
+  return Number.isFinite(solarKwh) && Math.abs(solarKwh - target) <= target * 0.02
+    ? null
+    : 'annual solar total is outside the ±2% reference envelope'
+}
+
 const runValidation = (records: readonly EnergyInterval[]): string[] => {
   const errors: string[] = []
   const error = (message: string) => {
@@ -168,9 +178,12 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
   const days: DailySummary[] = Array.from({ length: 365 }, (_, index) => ({
     dayOfYear: index + 1,
     month: new Date(Date.UTC(scenario.year, 0, index + 1)).getUTCMonth() + 1,
-    rain: false,
-    heatwave: false,
-    minimumTemperatureF: Number.POSITIVE_INFINITY,
+    day: new Date(Date.UTC(scenario.year, 0, index + 1)).getUTCDate(),
+    slotCount: 0,
+    heatwaveSlotCount: 0,
+    currentPrecipitationRun: 0,
+    maximumPrecipitationRun: 0,
+    maximumTemperatureF: Number.NEGATIVE_INFINITY,
     tripCount: 0,
   }))
   let totalsValid = true
@@ -232,6 +245,17 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     ) {
       error(`index ${index}: precipitationInches must be finite and nonnegative`)
     }
+    if (
+      typeof candidate.precipitationInches === 'number' &&
+      Number.isFinite(candidate.precipitationInches) &&
+      candidate.precipitationInches > 0 &&
+      candidate.weatherState !== 'rain'
+    ) error(`index ${index}: positive precipitation requires weatherState rain`)
+    if (candidate.weatherState === 'rain' && candidate.precipitationInches !== undefined && !(
+      typeof candidate.precipitationInches === 'number' &&
+      Number.isFinite(candidate.precipitationInches) &&
+      candidate.precipitationInches > 0
+    )) error(`index ${index}: weatherState rain requires positive precipitation`)
 
     const breakdown = candidate.homeBreakdownKwh
     if (!isRecord(breakdown)) {
@@ -341,6 +365,9 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     if (record.tripKwh > 0 && record.evKwh > 0) {
       error(`index ${index}: EV trip and charging occur together`)
     }
+    if (record.tripKwh > 0 && record.evAvailable !== false) {
+      error(`index ${index}: EV trip requires the vehicle to be unavailable`)
+    }
 
     const supply = record.solarKwh + record.batteryDischargeKwh + record.gridImportKwh
     const demand = record.homeKwh + record.evKwh + record.batteryChargeKwh +
@@ -448,9 +475,18 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
         totalsValid = false
       }
       const day = days[expected.dayOfYear - 1]!
-      day.rain ||= record.precipitationInches > 0
-      day.heatwave ||= record.dayType === 'heatwave'
-      day.minimumTemperatureF = Math.min(day.minimumTemperatureF, record.temperatureF)
+      day.slotCount += 1
+      if (record.dayType === 'heatwave') day.heatwaveSlotCount += 1
+      if (record.precipitationInches > 0) {
+        day.currentPrecipitationRun += 1
+        day.maximumPrecipitationRun = Math.max(
+          day.maximumPrecipitationRun,
+          day.currentPrecipitationRun,
+        )
+      } else {
+        day.currentPrecipitationRun = 0
+      }
+      day.maximumTemperatureF = Math.max(day.maximumTemperatureF, record.temperatureF)
       if (record.tripKwh > 0) day.tripCount += 1
     } else {
       totalsValid = false
@@ -482,6 +518,8 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
         error(`month ${profile.month} EV charge total is outside the 250–450 kWh envelope`)
       }
     })
+    const annualSolarError = __annualSolarTotalError(annual.solarKwh)
+    if (annualSolarError !== null) error(annualSolarError)
     if (annual.homeKwh < 13_500 - tolerance || annual.homeKwh > 17_500 + tolerance) {
       error('annual home total is outside the 13500–17500 kWh envelope')
     }
@@ -503,16 +541,29 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
   })
 
   const winter = (month: number) => month === 12 || month <= 2
-  if (!hasConsecutiveDays(days, 2, (day) => winter(day.month) && day.rain)) {
+  if (!hasConsecutiveDays(
+    days,
+    2,
+    (day) => winter(day.month) && day.maximumPrecipitationRun >= 12,
+  )) {
     error('annual conditions are missing required winter multi-day rain')
   }
-  if (!hasConsecutiveDays(days, 3, (day) => day.month >= 7 && day.month <= 9 && day.heatwave)) {
+  if (!hasConsecutiveDays(
+    days,
+    3,
+    (day) => day.month >= 7 && day.month <= 9 &&
+      day.slotCount > 0 && day.heatwaveSlotCount === day.slotCount,
+  )) {
     error('annual conditions are missing required summer heatwave')
   }
   if (!hasConsecutiveDays(days, 2, (day) => {
     const profile = scenario.months[day.month - 1]
-    return winter(day.month) && profile !== undefined &&
-      day.minimumTemperatureF <= profile.lowF - 4
+    const nextProfile = scenario.months[day.month % 12]
+    if (!winter(day.month) || profile === undefined || nextProfile === undefined) return false
+    const daysInMonth = new Date(Date.UTC(scenario.year, day.month, 0)).getUTCDate()
+    const monthProgress = (day.day - 1) / daysInMonth
+    const expectedHighF = profile.highF + (nextProfile.highF - profile.highF) * monthProgress
+    return day.maximumTemperatureF < expectedHighF - 5
   })) error('annual conditions are missing required winter cold snap')
 
   const precipitation = (months: readonly number[]) => records.reduce((total, record) =>

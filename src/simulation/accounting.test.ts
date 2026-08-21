@@ -45,6 +45,79 @@ describe('accountInterval', () => {
   })
 
   it.each([
+    [
+      'top-level extra',
+      {
+        tariff: { energyRatesUsdPerKwh: { base: 1, low: 2, high: 3 } },
+        emissions: { kgCo2ePerKwh: 4 },
+        extra: true,
+      },
+      'Invalid accounting scenario shape: expected exactly tariff,emissions',
+    ],
+    [
+      'top-level missing key',
+      { tariff: { energyRatesUsdPerKwh: { base: 1, low: 2, high: 3 } } },
+      'Invalid accounting scenario shape: expected exactly tariff,emissions',
+    ],
+    [
+      'tariff extra',
+      {
+        tariff: { energyRatesUsdPerKwh: { base: 1, low: 2, high: 3 }, extra: true },
+        emissions: { kgCo2ePerKwh: 4 },
+      },
+      'Invalid accounting scenario tariff shape: expected exactly energyRatesUsdPerKwh',
+    ],
+    [
+      'tariff missing key',
+      {
+        tariff: {},
+        emissions: { kgCo2ePerKwh: 4 },
+      },
+      'Invalid accounting scenario tariff shape: expected exactly energyRatesUsdPerKwh',
+    ],
+    [
+      'rates extra',
+      {
+        tariff: { energyRatesUsdPerKwh: { base: 1, low: 2, high: 3, extra: 4 } },
+        emissions: { kgCo2ePerKwh: 4 },
+      },
+      'Invalid accounting scenario energy rates shape: expected exactly base,low,high',
+    ],
+    [
+      'rates missing key',
+      {
+        tariff: { energyRatesUsdPerKwh: { base: 1, low: 2 } },
+        emissions: { kgCo2ePerKwh: 4 },
+      },
+      'Invalid accounting scenario energy rates shape: expected exactly base,low,high',
+    ],
+    [
+      'emissions extra',
+      {
+        tariff: { energyRatesUsdPerKwh: { base: 1, low: 2, high: 3 } },
+        emissions: { kgCo2ePerKwh: 4, extra: true },
+      },
+      'Invalid accounting scenario emissions shape: expected exactly kgCo2ePerKwh',
+    ],
+    [
+      'emissions missing key',
+      {
+        tariff: { energyRatesUsdPerKwh: { base: 1, low: 2, high: 3 } },
+        emissions: {},
+      },
+      'Invalid accounting scenario emissions shape: expected exactly kgCo2ePerKwh',
+    ],
+  ])('rejects %s in a caller-supplied accounting scenario', (_description, invalidScenario, message) => {
+    expect(() => accountInterval({
+      tou: 'base',
+      homeKwh: 0,
+      evKwh: 0,
+      gridImportKwh: 0,
+      gridExportKwh: 0,
+    }, invalidScenario as AccountingScenario)).toThrow(message)
+  })
+
+  it.each([
     null,
     {},
     { tariff: null, emissions: scenario.emissions },

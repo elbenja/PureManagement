@@ -1,4 +1,5 @@
 import type { TouPeriod } from '../domain/energy'
+import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 
 export interface AccountingInput {
@@ -39,20 +40,35 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key)
 
+const hasExactEnumerableShape = (value: object, fields: readonly string[]) => {
+  const keys = Object.keys(value)
+  return keys.length === fields.length && fields.every((field) => keys.includes(field))
+}
+
 const validateScenario = (scenario: AccountingScenario) => {
-  if (!isObject(scenario) || !isObject(scenario.tariff) || !isObject(scenario.emissions)) {
-    throw new Error('Invalid accounting scenario shape')
+  if (!isObject(scenario)) throw new Error('Invalid accounting scenario shape')
+  const canonicalScenario = scenario === LOS_ANGELES_AUGUST_2026 || scenario === LOS_ANGELES_2026
+  if (!canonicalScenario && !hasExactEnumerableShape(scenario, ['tariff', 'emissions'])) {
+    throw new Error('Invalid accounting scenario shape: expected exactly tariff,emissions')
   }
-  if (
-    !hasOwn(scenario, 'tariff') || !hasOwn(scenario, 'emissions') ||
-    !hasOwn(scenario.tariff, 'energyRatesUsdPerKwh') ||
-    !hasOwn(scenario.emissions, 'kgCo2ePerKwh')
-  ) throw new Error('Invalid accounting scenario shape')
+  if (!isObject(scenario.tariff)) throw new Error('Invalid accounting scenario tariff shape')
+  if (!isObject(scenario.emissions)) throw new Error('Invalid accounting scenario emissions shape')
+  if (!canonicalScenario && !hasExactEnumerableShape(scenario.tariff, ['energyRatesUsdPerKwh'])) {
+    throw new Error(
+      'Invalid accounting scenario tariff shape: expected exactly energyRatesUsdPerKwh',
+    )
+  }
+  if (!canonicalScenario && !hasExactEnumerableShape(scenario.emissions, ['kgCo2ePerKwh'])) {
+    throw new Error('Invalid accounting scenario emissions shape: expected exactly kgCo2ePerKwh')
+  }
   if (validatedFrozenScenarios.has(scenario)) return
   const rates = scenario.tariff.energyRatesUsdPerKwh
   const periods = ['base', 'low', 'high'] as const
+  if (!isObject(rates)) throw new Error('Invalid accounting scenario energy rates')
+  if (!canonicalScenario && !hasExactEnumerableShape(rates, periods)) {
+    throw new Error('Invalid accounting scenario energy rates shape: expected exactly base,low,high')
+  }
   if (
-    !isObject(rates) || Reflect.ownKeys(rates).length !== periods.length ||
     !periods.every((period) => hasOwn(rates, period) && Number.isFinite(rates[period]) && rates[period] > 0)
   ) {
     throw new Error('Invalid accounting scenario energy rates')

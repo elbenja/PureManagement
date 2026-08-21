@@ -79,6 +79,53 @@ describe('routeInterval', () => {
   })
 
   it.each([
+    [
+      'top-level extra',
+      {
+        intervalMinutes: 5,
+        battery: { capacityKwh: 13.5, maxPowerKw: 5, roundTripEfficiency: 0.9, reservePercent: 15 },
+        extra: true,
+      },
+      'Invalid router scenario shape: expected exactly intervalMinutes,battery',
+    ],
+    [
+      'top-level missing key',
+      { intervalMinutes: 5 },
+      'Invalid router scenario shape: expected exactly intervalMinutes,battery',
+    ],
+    [
+      'battery extra',
+      {
+        intervalMinutes: 5,
+        battery: {
+          capacityKwh: 13.5,
+          maxPowerKw: 5,
+          roundTripEfficiency: 0.9,
+          reservePercent: 15,
+          extra: true,
+        },
+      },
+      'Invalid router scenario battery shape: expected exactly capacityKwh,maxPowerKw,roundTripEfficiency,reservePercent',
+    ],
+    [
+      'battery missing key',
+      {
+        intervalMinutes: 5,
+        battery: { capacityKwh: 13.5, maxPowerKw: 5, roundTripEfficiency: 0.9 },
+      },
+      'Invalid router scenario battery shape: expected exactly capacityKwh,maxPowerKw,roundTripEfficiency,reservePercent',
+    ],
+  ])('rejects %s in a caller-supplied router scenario', (_description, invalidScenario, message) => {
+    expect(() => routeInterval({
+      solarKwh: 0,
+      homeKwh: 0,
+      evKwh: 0,
+      batterySocKwh: reserveKwh,
+      minuteOfDay: 0,
+    }, invalidScenario as RouterScenario)).toThrow(message)
+  })
+
+  it.each([
     null,
     {},
     { intervalMinutes: 0, battery: scenario.battery },

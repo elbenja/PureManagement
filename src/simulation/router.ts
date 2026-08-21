@@ -1,4 +1,5 @@
 import type { EnergyNode, Transfer } from '../domain/energy'
+import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 
 export interface RouterInput {
@@ -55,20 +56,30 @@ const frozenScenarioConstants = new WeakMap<object, RouterConstants>()
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
-const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key)
+const hasExactEnumerableShape = (value: object, fields: readonly string[]) => {
+  const keys = Object.keys(value)
+  return keys.length === fields.length && fields.every((field) => keys.includes(field))
+}
 
 const scenarioConstants = (scenario: RouterScenario): RouterConstants => {
   if (!isObject(scenario)) throw new Error('Invalid router scenario')
-  if (!hasOwn(scenario, 'intervalMinutes') || !hasOwn(scenario, 'battery')) {
-    throw new Error('Invalid router scenario shape')
+  const canonicalScenario = scenario === LOS_ANGELES_AUGUST_2026 || scenario === LOS_ANGELES_2026
+  if (
+    !canonicalScenario &&
+    !hasExactEnumerableShape(scenario, ['intervalMinutes', 'battery'])
+  ) {
+    throw new Error('Invalid router scenario shape: expected exactly intervalMinutes,battery')
   }
   const cached = frozenScenarioConstants.get(scenario)
   if (cached !== undefined) return cached
   const battery = scenario.battery
   if (!isObject(battery)) throw new Error('Invalid router scenario battery')
-  if (!['capacityKwh', 'maxPowerKw', 'roundTripEfficiency', 'reservePercent'].every(
-    (field) => hasOwn(battery, field),
-  )) throw new Error('Invalid router scenario battery shape')
+  const batteryFields = ['capacityKwh', 'maxPowerKw', 'roundTripEfficiency', 'reservePercent']
+  if (!canonicalScenario && !hasExactEnumerableShape(battery, batteryFields)) {
+    throw new Error(
+      'Invalid router scenario battery shape: expected exactly capacityKwh,maxPowerKw,roundTripEfficiency,reservePercent',
+    )
+  }
   const { intervalMinutes } = scenario
   if (
     !Number.isInteger(intervalMinutes) ||
