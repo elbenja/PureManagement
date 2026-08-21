@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { EnergyInterval } from '../domain/energy'
 import { buildYearClock } from './yearClock'
 import {
@@ -7,6 +7,7 @@ import {
   getRangeWindow,
   getTrailingWindow,
   rangeSlots,
+  type FixedTimeRange,
 } from './aggregate'
 
 const interval = (overrides: Partial<EnergyInterval> = {}): EnergyInterval => ({
@@ -164,6 +165,11 @@ describe('aggregateIntervals', () => {
 })
 
 describe('getTrailingWindow', () => {
+  it('accepts only fixed time ranges', () => {
+    expectTypeOf<FixedTimeRange>().toEqualTypeOf<'24h' | '7d' | '30d' | '31d'>()
+    expectTypeOf<Parameters<typeof getTrailingWindow>[0]>().toEqualTypeOf<FixedTimeRange>()
+  })
+
   it('returns a 24-hour window with both navigation directions available', () => {
     expect(getTrailingWindow('24h', 575, 8928)).toEqual({
       start: 288,
@@ -303,7 +309,29 @@ describe('getRangeWindow', () => {
       previousAnchor: 287,
       nextAnchor: 863,
     })
-    expect(getRangeWindow(annualRecords, '24h', 574).previousAnchor).toBeNull()
+    expect(getRangeWindow(annualRecords, '24h', 574).previousAnchor).toBe(286)
+  })
+
+  it.each([
+    ['24h', 288],
+    ['30d', 8_640],
+  ] as const)('round-trips an initial partial %s window through next and previous', (range, next) => {
+    const initial = getRangeWindow(annualRecords, range, 0)
+    const forward = getRangeWindow(annualRecords, range, initial.nextAnchor!)
+    const backward = getRangeWindow(annualRecords, range, forward.previousAnchor!)
+
+    expect(initial.nextAnchor).toBe(next)
+    expect(forward.previousAnchor).toBe(0)
+    expect(backward).toEqual(initial)
+  })
+
+  it('accepts a consecutive canonical ledger slice beginning above index zero', () => {
+    const slice = annualRecords.slice(100, 500)
+
+    expect(getRangeWindow(slice, '24h', 399)).toMatchObject({
+      start: 112,
+      end: 399,
+    })
   })
 
   it('rejects empty, unknown, out-of-bounds, and non-integer inputs', () => {
@@ -315,7 +343,7 @@ describe('getRangeWindow', () => {
   })
 
   it.each([
-    ['index', { index: 1 }],
+    ['index', { index: 1.5 }],
     ['year', { year: Number.NaN }],
     ['month', { month: 13 }],
     ['day', { day: 0 }],
@@ -331,5 +359,35 @@ describe('getRangeWindow', () => {
 
     expect(source).toEqual(before)
     expect(source.every((record, index) => record === before[index])).toBe(true)
+  })
+
+  it('caches successful structural validation for a deeply frozen ledger', () => {
+    let indexReads = 0
+    const source = Object.freeze([0, 1].map((index) => {
+      const record = interval({ index })
+      Object.defineProperty(record, 'index', {
+        enumerable: true,
+        get: () => {
+          indexReads += 1
+          return index
+        },
+      })
+      return Object.freeze(record)
+    }))
+
+    getRangeWindow(source, '24h', 1)
+    const readsAfterFirstValidation = indexReads
+    getRangeWindow(source, '24h', 1)
+
+    expect(readsAfterFirstValidation).toBe(source.length)
+    expect(indexReads).toBe(readsAfterFirstValidation)
+  })
+
+  it('revalidates mutable ledgers after a successful call', () => {
+    const source = [interval()]
+    getRangeWindow(source, 'month', 0)
+    source[0]!.month = 13
+
+    expect(() => getRangeWindow(source, 'month', 0)).toThrow(/record 0/i)
   })
 })

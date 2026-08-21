@@ -225,6 +225,19 @@ describe('component-ready views', () => {
     expect(final.range.canGoNext).toBe(false)
   })
 
+  it('preserves canonical indexes when selecting from a valid ledger slice', () => {
+    const source = records.slice(100, 500)
+    const view = getHistoryView(source, '24h', 399)!
+
+    expect(view.records).toEqual(source.slice(112, 400))
+    expect(view.range).toMatchObject({
+      startIndex: 212,
+      endIndex: 499,
+    })
+    expect(view.series[0]!.index).toBe(212)
+    expect(view.series.at(-1)!.index).toBe(499)
+  })
+
   it('does not mutate the source array while creating views', () => {
     const source = records.slice(0, 400)
     const before = source.slice()
@@ -336,6 +349,20 @@ describe('annual history views', () => {
     malformed[5]!.solarKw = Number.NaN
 
     expect(() => getHistoryView(malformed, '24h', 9)).toThrow(/record 5.*history/i)
+  })
+
+  it('rejects overflow in a sampled history bucket', () => {
+    const source = generateMonth().slice(0, 2_049).map((record, index) =>
+      index < 2 ? { ...record, solarKw: Number.MAX_VALUE } : record)
+
+    expect(() => getHistoryView(source, '31d', source.length - 1)).toThrow(/overflow/i)
+  })
+
+  it('rejects overflow in the final short sampled history bucket', () => {
+    const source = generateMonth().slice(0, 4_097).map((record, index, selected) =>
+      index >= selected.length - 2 ? { ...record, solarKw: Number.MAX_VALUE } : record)
+
+    expect(() => getHistoryView(source, '31d', source.length - 1)).toThrow(/overflow/i)
   })
 
   it('does not mutate annual records while selecting and sampling', () => {

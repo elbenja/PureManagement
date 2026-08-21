@@ -107,12 +107,22 @@ describe('getDailyOutlook', () => {
     expect(getDailyOutlook(records, indexAt(2, 15, 0) + 0.9, 1)[0]!.date).toBe('2026-02-15')
   })
 
+  it('accepts a consecutive canonical ledger slice beginning above index zero', () => {
+    const source = records.slice(100, 500)
+
+    expect(getDailyOutlook(source, 0, 1)[0]!.date).toBe('2026-01-01')
+  })
+
   it.each([0, -1, 1.5, 8, Number.NaN, Number.POSITIVE_INFINITY])(
     'rejects invalid day count %s',
     (days) => {
       expect(() => getDailyOutlook(records, 0, days)).toThrow(/days/i)
     },
   )
+
+  it('validates day count before returning empty data', () => {
+    expect(() => getDailyOutlook([], 0, 0)).toThrow(/days/i)
+  })
 
   it.each([
     ['temperatureF', Number.NaN],
@@ -125,6 +135,19 @@ describe('getDailyOutlook', () => {
     expect(() => getDailyOutlook(malformed, 0, 1)).toThrow(/record 0.*outlook/i)
   })
 
+  it.each(['solarKwh', 'precipitationInches'] as const)(
+    'rejects accumulated %s overflow',
+    (field) => {
+      const source = [0, 1].map((index) => ({
+        ...records[0]!,
+        index,
+        [field]: Number.MAX_VALUE,
+      }))
+
+      expect(() => getDailyOutlook(source, 0, 1)).toThrow(/overflow/i)
+    },
+  )
+
   it('does not mutate source records', () => {
     const before = records.slice()
 
@@ -132,5 +155,35 @@ describe('getDailyOutlook', () => {
 
     expect(records).toEqual(before)
     expect(records.every((record, index) => record === before[index])).toBe(true)
+  })
+
+  it('caches successful structural validation for a deeply frozen ledger', () => {
+    let indexReads = 0
+    const source = Object.freeze([0, 1].map((index) => {
+      const record = { ...records[0]! }
+      Object.defineProperty(record, 'index', {
+        enumerable: true,
+        get: () => {
+          indexReads += 1
+          return index
+        },
+      })
+      return Object.freeze(record)
+    }))
+
+    getDailyOutlook(source, 0, 1)
+    const readsAfterFirstValidation = indexReads
+    getDailyOutlook(source, 0, 1)
+
+    expect(readsAfterFirstValidation).toBe(source.length)
+    expect(indexReads).toBe(readsAfterFirstValidation)
+  })
+
+  it('revalidates mutable ledgers after a successful call', () => {
+    const source = [{ ...records[0]! }]
+    getDailyOutlook(source, 0, 1)
+    source[0]!.weatherState = 'snow' as WeatherState
+
+    expect(() => getDailyOutlook(source, 0, 1)).toThrow(/record 0.*outlook/i)
   })
 })

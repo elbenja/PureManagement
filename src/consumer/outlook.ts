@@ -18,6 +18,8 @@ const weatherStates: readonly WeatherState[] = [
 
 const dryWeatherTieOrder = ['overcast', 'partly-cloudy', 'clear'] as const
 
+const validatedFrozenOutlookRecords = new WeakSet<readonly EnergyInterval[]>()
+
 const clampIndex = (index: number, recordCount: number): number => {
   if (Number.isNaN(index) || index === Number.NEGATIVE_INFINITY) return 0
   if (index === Number.POSITIVE_INFINITY) return recordCount - 1
@@ -28,13 +30,23 @@ const dateKey = (record: EnergyInterval): string =>
   `${record.year}-${record.month.toString().padStart(2, '0')}-${record.day.toString().padStart(2, '0')}`
 
 const validateRecords = (records: readonly EnergyInterval[]) => {
+  if (validatedFrozenOutlookRecords.has(records)) return
+
+  let firstRecordIndex: number | null = null
   let previousDate = Number.NEGATIVE_INFINITY
 
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index]
+    const recordIndex = record?.index
+    if (index === 0 && typeof recordIndex === 'number' && Number.isSafeInteger(recordIndex)) {
+      firstRecordIndex = recordIndex
+    }
     if (
       record === undefined ||
-      record.index !== index ||
+      typeof recordIndex !== 'number' ||
+      !Number.isSafeInteger(recordIndex) ||
+      firstRecordIndex === null ||
+      recordIndex !== firstRecordIndex + index ||
       !Number.isInteger(record.year) || record.year < 1 ||
       !Number.isInteger(record.month) || record.month < 1 || record.month > 12 ||
       !Number.isInteger(record.day) || record.day < 1 ||
@@ -53,6 +65,10 @@ const validateRecords = (records: readonly EnergyInterval[]) => {
     }
     previousDate = date
   }
+
+  if (Object.isFrozen(records) && records.every((record) => Object.isFrozen(record))) {
+    validatedFrozenOutlookRecords.add(records)
+  }
 }
 
 export const getDailyOutlook = (
@@ -60,10 +76,10 @@ export const getDailyOutlook = (
   anchorIndex: number,
   days = 7,
 ): DailyOutlook[] => {
-  if (records.length === 0) return []
   if (!Number.isInteger(days) || days < 1 || days > 7) {
     throw new Error('Invalid days')
   }
+  if (records.length === 0) return []
 
   validateRecords(records)
   const anchor = clampIndex(anchorIndex, records.length)
@@ -97,6 +113,9 @@ export const getDailyOutlook = (
       expectedSolarKwh += record.solarKwh
       if (record.precipitationInches > 0) hasRain = true
       if (record.weatherState !== 'rain') dryCounts[record.weatherState] += 1
+      if (!Number.isFinite(precipitationInches) || !Number.isFinite(expectedSolarKwh)) {
+        throw new Error(`Record ${record.index} causes outlook aggregate overflow`)
+      }
       index += 1
     }
 

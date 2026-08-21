@@ -28,7 +28,7 @@ export const rangeSlots = {
   '31d': LOS_ANGELES_AUGUST_2026.records,
 } as const
 
-type FixedTimeRange = keyof typeof rangeSlots
+export type FixedTimeRange = keyof typeof rangeSlots
 
 const isFixedTimeRange = (value: unknown): value is FixedTimeRange =>
   value === '24h' || value === '7d' || value === '30d' || value === '31d'
@@ -42,6 +42,8 @@ export interface RangeWindow {
   previousAnchor: number | null
   nextAnchor: number | null
 }
+
+const validatedFrozenRangeRecords = new WeakSet<readonly EnergyInterval[]>()
 
 const zeroTotals = (): EnergyTotals => ({
   solarKwh: 0,
@@ -159,7 +161,7 @@ export const buildPrefixTotals = (records: readonly EnergyInterval[]): EnergyTot
 }
 
 export const getTrailingWindow = (
-  range: TimeRange,
+  range: FixedTimeRange,
   anchorIndex: number,
   recordCount: number,
 ) => {
@@ -182,21 +184,24 @@ export const getTrailingWindow = (
   }
 }
 
-export const getRangeWindow = (
-  records: readonly EnergyInterval[],
-  range: TimeRange,
-  anchorIndex: number,
-): RangeWindow => {
-  if (records.length === 0) throw new Error('Invalid records')
-  if (!isTimeRange(range)) throw new Error('Invalid range')
-  if (!Number.isInteger(anchorIndex) || anchorIndex < 0 || anchorIndex >= records.length) {
-    throw new Error('Invalid anchorIndex')
-  }
+const validateRangeRecords = (records: readonly EnergyInterval[]) => {
+  if (validatedFrozenRangeRecords.has(records)) return
 
+  let firstRecordIndex: number | null = null
   let previousDate = Number.NEGATIVE_INFINITY
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index]
-    if (record === undefined || record.index !== index) {
+    const recordIndex = record?.index
+    if (index === 0 && typeof recordIndex === 'number' && Number.isSafeInteger(recordIndex)) {
+      firstRecordIndex = recordIndex
+    }
+    if (
+      record === undefined ||
+      typeof recordIndex !== 'number' ||
+      !Number.isSafeInteger(recordIndex) ||
+      firstRecordIndex === null ||
+      recordIndex !== firstRecordIndex + index
+    ) {
       throw new Error(`Record ${index} contains an invalid canonical index`)
     }
     if (
@@ -215,13 +220,32 @@ export const getRangeWindow = (
     previousDate = date
   }
 
+  if (Object.isFrozen(records) && records.every((record) => Object.isFrozen(record))) {
+    validatedFrozenRangeRecords.add(records)
+  }
+}
+
+export const getRangeWindow = (
+  records: readonly EnergyInterval[],
+  range: TimeRange,
+  anchorIndex: number,
+): RangeWindow => {
+  if (records.length === 0) throw new Error('Invalid records')
+  if (!isTimeRange(range)) throw new Error('Invalid range')
+  if (!Number.isInteger(anchorIndex) || anchorIndex < 0 || anchorIndex >= records.length) {
+    throw new Error('Invalid anchorIndex')
+  }
+
+  validateRangeRecords(records)
+
   const end = anchorIndex
   if (isFixedTimeRange(range)) {
     const slots = rangeSlots[range]
+    const start = Math.max(0, end - slots + 1)
     return {
-      start: Math.max(0, end - slots + 1),
+      start,
       end,
-      previousAnchor: end >= slots * 2 - 1 ? end - slots : null,
+      previousAnchor: start > 0 ? start - 1 : null,
       nextAnchor: end + slots < records.length ? end + slots : null,
     }
   }

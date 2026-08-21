@@ -227,6 +227,16 @@ const buildHistorySeries = (
         batteryTransferKw(record, 'outgoing') - batteryTransferKw(record, 'incoming')
       gridImportKw += record.gridImportKw
       gridExportKw += record.gridExportKw
+      if (![
+        solarKw,
+        homeKw,
+        evKw,
+        batteryNetKw,
+        gridImportKw,
+        gridExportKw,
+      ].every(Number.isFinite)) {
+        throw new Error(`Record ${record.index} causes history bucket overflow`)
+      }
     }
 
     const count = end - start
