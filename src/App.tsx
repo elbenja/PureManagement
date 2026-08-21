@@ -1,6 +1,7 @@
 import type { EnergyInterval } from './domain/energy'
 import { SimulationInspector } from './inspector/SimulationInspector'
-import { generateMonth } from './simulation/generateMonth'
+import { LOS_ANGELES_2026 } from './scenario/losAngeles2026'
+import { generateYear } from './simulation/generateYear'
 
 type GenerationResult =
   | { records: readonly EnergyInterval[]; failed: false }
@@ -12,7 +13,7 @@ const getGenerationResult = (): GenerationResult => {
   if (generationResult !== undefined) return generationResult
 
   try {
-    generationResult = { records: generateMonth(), failed: false }
+    generationResult = { records: generateYear(), failed: false }
   } catch {
     generationResult = { records: null, failed: true }
   }
@@ -31,7 +32,12 @@ function App() {
     )
   }
 
-  return <SimulationInspector records={result.records} />
+  return (
+    <SimulationInspector
+      records={result.records}
+      scenario={LOS_ANGELES_2026}
+    />
+  )
 }
 
 export default App

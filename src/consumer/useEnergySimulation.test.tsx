@@ -36,6 +36,24 @@ afterEach(() => {
 
 describe('useEnergySimulation', () => {
   const records = generateMonth()
+  const calendarRecords = records.slice(0, 5).map((record, index) => {
+    const dates = [
+      [1, 30],
+      [1, 31],
+      [2, 1],
+      [2, 2],
+      [3, 1],
+    ] as const
+    const [month, day] = dates[index]!
+    return {
+      ...record,
+      index,
+      year: 2026,
+      month,
+      day,
+      iso: `2026-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T00:00:00.000-08:00`,
+    }
+  })
 
   it('starts with component-ready live and trailing 24-hour views', () => {
     const { result } = renderHook(() => useEnergySimulation(records))
@@ -63,6 +81,31 @@ describe('useEnergySimulation', () => {
       startIndex: 985,
       endIndex: 3_000,
     })
+  })
+
+  it.each(['30d', 'month', 'ytd'] as const)(
+    'switches to the %s annual history range',
+    (range) => {
+      const { result } = renderHook(() => useEnergySimulation(records))
+      act(() => result.current.scrubTo(3_000))
+
+      act(() => result.current.setRange(range))
+
+      expect(result.current.range).toBe(range)
+      expect(result.current.live?.index).toBe(3_000)
+      expect(result.current.history?.range.key).toBe(range)
+    },
+  )
+
+  it('exposes a memoized seven-day outlook from the displayed anchor', () => {
+    const { result, rerender } = renderHook(() => useEnergySimulation(records))
+
+    expect(result.current.outlook).toHaveLength(7)
+    expect(result.current.outlook[0]).toMatchObject({ date: '2026-08-01' })
+    const outlook = result.current.outlook
+
+    rerender()
+    expect(result.current.outlook).toBe(outlook)
   })
 
   it('opens the immediately preceding period and pauses playback', () => {
@@ -97,6 +140,37 @@ describe('useEnergySimulation', () => {
     act(() => result.current.nextPeriod())
     expect(result.current.live?.index).toBe(1_000)
     expect(result.current.history).toBe(historyAtLive)
+  })
+
+  it('uses calendar range anchors for reversible period navigation', () => {
+    const { result } = renderHook(() => useEnergySimulation(calendarRecords))
+    act(() => result.current.scrubTo(3))
+    act(() => result.current.setRange('month'))
+
+    expect(result.current.history?.range).toMatchObject({
+      startIndex: 2,
+      endIndex: 3,
+      previousAnchor: 1,
+      nextAnchor: 4,
+      canGoNext: false,
+    })
+
+    act(() => result.current.previousPeriod())
+    expect(result.current.live?.index).toBe(1)
+    expect(result.current.history?.range).toMatchObject({
+      startIndex: 0,
+      endIndex: 1,
+      nextAnchor: 2,
+      canGoNext: true,
+    })
+
+    act(() => result.current.nextPeriod())
+    expect(result.current.live?.index).toBe(2)
+    expect(result.current.history?.range).toMatchObject({
+      startIndex: 2,
+      endIndex: 3,
+      canGoNext: false,
+    })
   })
 
   it('returns from history to the retained live position and resumes animation', () => {
@@ -151,6 +225,7 @@ describe('useEnergySimulation', () => {
     expect(result.current).toMatchObject({
       live: null,
       history: null,
+      outlook: [],
       range: '24h',
       isPlaying: false,
     })
@@ -169,6 +244,7 @@ describe('useEnergySimulation', () => {
     expect(result.current).toMatchObject({
       live: null,
       history: null,
+      outlook: [],
       range: '24h',
       isPlaying: false,
     })

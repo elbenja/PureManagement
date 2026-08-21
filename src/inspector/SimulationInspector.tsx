@@ -6,17 +6,27 @@ import type { TimeRange } from '../simulation/aggregate'
 
 export interface SimulationInspectorProps {
   records: readonly EnergyInterval[]
+  scenario?: {
+    id: string
+    location: { neighborhood: string; city: string }
+  }
 }
 
 const ranges: { key: TimeRange; label: string }[] = [
   { key: '24h', label: 'Last 24h' },
   { key: '7d', label: 'Last week' },
+  { key: '30d', label: 'Last 30 days' },
   { key: '31d', label: 'Last month' },
+  { key: 'month', label: 'Calendar month' },
+  { key: 'ytd', label: 'Year to date' },
 ]
 
 const number = (value: number, digits = 3) => value.toFixed(digits)
 
-export const SimulationInspector = ({ records }: SimulationInspectorProps) => {
+export const SimulationInspector = ({
+  records,
+  scenario = LOS_ANGELES_AUGUST_2026,
+}: SimulationInspectorProps) => {
   const simulation = useEnergySimulation(records)
   const datasetKey = records.length === 0
     ? 'empty'
@@ -43,7 +53,8 @@ export const SimulationInspector = ({ records }: SimulationInspectorProps) => {
     <main className="simulation-inspector">
       <header>
         <h1>Energy simulation inspector</h1>
-        <p>{LOS_ANGELES_AUGUST_2026.id}</p>
+        <p>{scenario.id}</p>
+        <p>{scenario.location.neighborhood}, {scenario.location.city}</p>
         <p>{records.length.toLocaleString('en-US')} records</p>
       </header>
 
@@ -69,6 +80,14 @@ export const SimulationInspector = ({ records }: SimulationInspectorProps) => {
           <div>
             <dt>Cloud factor</dt>
             <dd>{number(live.conditions.cloudFactor)}</dd>
+          </div>
+          <div>
+            <dt>Weather state</dt>
+            <dd>{live.conditions.weatherState}</dd>
+          </div>
+          <div>
+            <dt>Precipitation</dt>
+            <dd>{number(live.conditions.precipitationInches)} in</dd>
           </div>
           <div>
             <dt>Playback</dt>
@@ -218,6 +237,34 @@ export const SimulationInspector = ({ records }: SimulationInspectorProps) => {
           <div><dt>Savings</dt><dd>${number(history.totals.savingsUsd, 2)}</dd></div>
           <div><dt>Avoided CO2</dt><dd>{number(history.totals.avoidedCo2Kg)} kg CO2e</dd></div>
         </dl>
+      </section>
+
+      <section aria-labelledby="outlook-heading">
+        <h2 id="outlook-heading">Simulated 7-day outlook</h2>
+        <table aria-label="Simulated 7-day outlook">
+          <thead>
+            <tr>
+              <th scope="col">Date</th>
+              <th scope="col">Weather</th>
+              <th scope="col">Low</th>
+              <th scope="col">High</th>
+              <th scope="col">Rain</th>
+              <th scope="col">Solar</th>
+            </tr>
+          </thead>
+          <tbody>
+            {simulation.outlook.map((day) => (
+              <tr key={day.date}>
+                <th scope="row"><time dateTime={day.date}>{day.date}</time></th>
+                <td>{day.weatherState}</td>
+                <td>{number(day.minTemperatureF, 1)} °F</td>
+                <td>{number(day.maxTemperatureF, 1)} °F</td>
+                <td>{number(day.precipitationInches)} in</td>
+                <td>{number(day.expectedSolarKwh, 2)} kWh</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       <details>

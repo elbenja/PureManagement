@@ -1,9 +1,36 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { EnergyInterval } from '../domain/energy'
+import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { generateMonth } from '../simulation/generateMonth'
 import { SimulationInspector } from './SimulationInspector'
 
-const records = generateMonth()
+const augustRecords = generateMonth()
+const sample = augustRecords[0]!
+const records = new Array<EnergyInterval>(LOS_ANGELES_2026.records)
+for (let index = 0; index < 7; index += 1) {
+  records[index] = {
+    ...sample,
+    index,
+    year: 2026,
+    month: 1,
+    day: index + 1,
+    iso: `2026-01-${(index + 1).toString().padStart(2, '0')}T00:00:00.000-08:00`,
+  }
+}
+for (let index = records.length - 2_016; index < records.length; index += 1) {
+  records[index] = {
+    ...sample,
+    index,
+    year: 2026,
+    month: 12,
+    day: 31,
+    iso: `2026-12-31T23:55:00.000-08:00`,
+  }
+}
+const renderInspector = () => render(
+  <SimulationInspector records={records} scenario={LOS_ANGELES_2026} />,
+)
 
 beforeEach(() => {
   vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
@@ -16,13 +43,17 @@ afterEach(() => {
 
 describe('SimulationInspector', () => {
   it('inspects the public data contract and historical windows', () => {
-    render(<SimulationInspector records={records} />)
+    renderInspector()
 
-    expect(screen.getByText('woodland-hills-aug-2026-v1')).toBeVisible()
-    expect(screen.getByText('8,928 records')).toBeVisible()
+    expect(screen.getByText('woodland-hills-2026-v1')).toBeVisible()
+    expect(screen.getByText('Woodland Hills, Los Angeles')).toBeVisible()
+    expect(screen.getByText('105,120 records')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Last 24h' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Last week' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Last month' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Last 30 days' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Calendar month' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Year to date' })).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Last week' }))
 
@@ -32,7 +63,7 @@ describe('SimulationInspector', () => {
   })
 
   it('exposes playback, scrubbing, and bounded period navigation', () => {
-    render(<SimulationInspector records={records} />)
+    renderInspector()
 
     expect(screen.getByText('Paused')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Next period' })).toBeDisabled()
@@ -44,7 +75,7 @@ describe('SimulationInspector', () => {
     expect(screen.getByRole('button', { name: 'Next period' })).toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Previous day' }))
-    expect(screen.getByLabelText('Simulation interval')).toHaveValue('8639')
+    expect(screen.getByLabelText('Simulation interval')).toHaveValue('104831')
 
     fireEvent.change(screen.getByLabelText('Simulation interval'), {
       target: { value: '0' },
@@ -58,7 +89,7 @@ describe('SimulationInspector', () => {
   })
 
   it('shows five component-ready nodes, transfers, aggregates, and JSON', () => {
-    render(<SimulationInspector records={records} />)
+    renderInspector()
 
     const nodes = screen.getByRole('table', { name: 'Energy nodes' })
     expect(within(nodes).getAllByTestId('energy-node')).toHaveLength(5)
@@ -91,29 +122,36 @@ describe('SimulationInspector', () => {
       { ...records[lastIndex]!, transfers: [] },
     ]
 
-    render(<SimulationInspector records={recordsWithoutTransfers} />)
+    render(
+      <SimulationInspector
+        records={recordsWithoutTransfers}
+        scenario={LOS_ANGELES_2026}
+      />,
+    )
 
     expect(screen.getByText('No active transfers')).toBeVisible()
   })
 
   it('preserves user navigation for an equivalent dataset copy', () => {
-    const { rerender } = render(<SimulationInspector records={records} />)
+    const { rerender } = renderInspector()
     fireEvent.change(screen.getByLabelText('Simulation interval'), {
       target: { value: '0' },
     })
 
-    rerender(<SimulationInspector records={records.slice()} />)
+    rerender(
+      <SimulationInspector records={records.slice()} scenario={LOS_ANGELES_2026} />,
+    )
 
     expect(screen.getByLabelText('Simulation interval')).toHaveValue('0')
   })
 
   it('reinitializes at the final record for a same-length replacement dataset', () => {
-    const { rerender } = render(<SimulationInspector records={records} />)
+    const { rerender } = render(<SimulationInspector records={augustRecords} />)
     fireEvent.change(screen.getByLabelText('Simulation interval'), {
       target: { value: '0' },
     })
-    const replacement = records.map((record, index) => {
-      if (index !== 0 && index !== records.length - 1) return record
+    const replacement = augustRecords.map((record, index) => {
+      if (index !== 0 && index !== augustRecords.length - 1) return record
       return { ...record, iso: record.iso.replace('2026-08', '2026-09') }
     })
 
@@ -121,5 +159,20 @@ describe('SimulationInspector', () => {
 
     expect(screen.getByLabelText('Simulation interval')).toHaveValue('8927')
     expect(screen.getByText('Paused')).toBeVisible()
+  })
+
+  it('shows live weather, precipitation, and an accessible simulated outlook', () => {
+    renderInspector()
+    fireEvent.change(screen.getByLabelText('Simulation interval'), {
+      target: { value: '0' },
+    })
+
+    expect(screen.getByText('Weather')).toBeVisible()
+    expect(screen.getByText('Precipitation')).toBeVisible()
+    const outlook = screen.getByRole('table', { name: 'Simulated 7-day outlook' })
+    for (const name of ['Date', 'Weather', 'Low', 'High', 'Rain', 'Solar']) {
+      expect(within(outlook).getByRole('columnheader', { name })).toBeVisible()
+    }
+    expect(within(outlook).getAllByRole('row')).toHaveLength(8)
   })
 })

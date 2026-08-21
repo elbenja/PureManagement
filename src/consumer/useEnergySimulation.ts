@@ -8,7 +8,8 @@ import {
 } from 'react'
 import type { EnergyInterval } from '../domain/energy'
 import { usePlayback } from '../playback/usePlayback'
-import { rangeSlots, type TimeRange } from '../simulation/aggregate'
+import type { TimeRange } from '../simulation/aggregate'
+import { getDailyOutlook, type DailyOutlook } from './outlook'
 import {
   getHistoryView,
   getLiveFrame,
@@ -19,6 +20,7 @@ import {
 export interface EnergySimulationController {
   live: LiveFrame | null
   history: HistoryView | null
+  outlook: DailyOutlook[]
   range: TimeRange
   setRange: (range: TimeRange) => void
   play: () => void
@@ -64,12 +66,17 @@ export const useEnergySimulation = (
     () => getHistoryView(records, range, playback.index),
     [records, range, playback.index],
   )
+  const outlook = useMemo(
+    () => getDailyOutlook(records, playback.index, 7),
+    [records, playback.index],
+  )
   const history = useMemo(() => {
     if (selectedHistory === null) return null
 
-    const nextAnchor = playback.index + rangeSlots[range]
+    const nextAnchor = selectedHistory.range.nextAnchor
     const canGoNext = selectedHistory.range.canGoNext &&
       historyAnchor !== null &&
+      nextAnchor !== null &&
       nextAnchor <= retainedLiveIndex.current
 
     return {
@@ -79,7 +86,7 @@ export const useEnergySimulation = (
         canGoNext,
       },
     }
-  }, [historyAnchor, playback.index, range, selectedHistory])
+  }, [historyAnchor, selectedHistory])
 
   const setRange = useCallback((nextRange: TimeRange) => {
     if (records.length > 0) setRangeState(nextRange)
@@ -117,22 +124,23 @@ export const useEnergySimulation = (
   }, [playback.jumpDay, records.length])
 
   const previousPeriod = useCallback(() => {
-    if (!history?.range.canGoPrevious) return
-    const anchor = playback.index - rangeSlots[range]
+    const anchor = history?.range.previousAnchor
+    if (anchor === null || anchor === undefined) return
     setHistoryAnchor(anchor)
     playback.setHistoryAnchor(anchor)
-  }, [history, playback.index, playback.setHistoryAnchor, range])
+  }, [history, playback.setHistoryAnchor])
 
   const nextPeriod = useCallback(() => {
-    if (!history?.range.canGoNext) return
-    const anchor = playback.index + rangeSlots[range]
+    const anchor = history?.range.canGoNext ? history.range.nextAnchor : null
+    if (anchor === null || anchor === undefined) return
     setHistoryAnchor(anchor)
     playback.setHistoryAnchor(anchor)
-  }, [history, playback.index, playback.setHistoryAnchor, range])
+  }, [history, playback.setHistoryAnchor])
 
   return {
     live,
     history,
+    outlook,
     range,
     setRange,
     play,
