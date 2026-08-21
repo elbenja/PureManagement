@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Transfer } from '../domain/energy'
+import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
-import { routeInterval } from './router'
+import { routeInterval, type RouterScenario } from './router'
 
 const scenario = LOS_ANGELES_AUGUST_2026
 const intervalHours = scenario.intervalMinutes / 60
@@ -35,6 +36,69 @@ const expectConserved = (input: Parameters<typeof routeInterval>[0]) => {
 }
 
 describe('routeInterval', () => {
+  it('preserves legacy defaults and accepts the annual scenario without mutating either scenario', () => {
+    const input = {
+      solarKwh: 0.8,
+      homeKwh: 0.3,
+      evKwh: 0.2,
+      batterySocKwh: 6.75,
+      minuteOfDay: 12 * 60,
+    }
+    const augustBefore = JSON.stringify(LOS_ANGELES_AUGUST_2026)
+    const annualBefore = JSON.stringify(LOS_ANGELES_2026)
+
+    const legacy = routeInterval(input)
+
+    expect(routeInterval(input, LOS_ANGELES_AUGUST_2026)).toEqual(legacy)
+    expect(routeInterval(input, LOS_ANGELES_2026)).toEqual(legacy)
+    expect(JSON.stringify(LOS_ANGELES_AUGUST_2026)).toBe(augustBefore)
+    expect(JSON.stringify(LOS_ANGELES_2026)).toBe(annualBefore)
+  })
+
+  it('derives interval and battery limits from the supplied scenario', () => {
+    const custom: RouterScenario = {
+      intervalMinutes: 15,
+      battery: {
+        capacityKwh: 20,
+        maxPowerKw: 2,
+        roundTripEfficiency: 0.81,
+        reservePercent: 10,
+      },
+    }
+    const result = routeInterval({
+      solarKwh: 4,
+      homeKwh: 0,
+      evKwh: 0,
+      batterySocKwh: 10,
+      minuteOfDay: 12 * 60,
+    }, custom)
+
+    expect(result.batteryChargeKw).toBeCloseTo(1.8, 12)
+    expect(result.batteryChargeKwh).toBeCloseTo(0.45, 12)
+    expect(result.gridExportKwh).toBeCloseTo(3.5, 12)
+  })
+
+  it.each([
+    null,
+    {},
+    { intervalMinutes: 0, battery: scenario.battery },
+    { intervalMinutes: 7, battery: scenario.battery },
+    { intervalMinutes: 5, battery: { ...scenario.battery, capacityKwh: Number.NaN } },
+    { intervalMinutes: 5, battery: { ...scenario.battery, maxPowerKw: 0 } },
+    { intervalMinutes: 5, battery: { ...scenario.battery, roundTripEfficiency: 1.01 } },
+    { intervalMinutes: 5, battery: { ...scenario.battery, reservePercent: 100 } },
+    { intervalMinutes: 5, battery: Object.create(scenario.battery) },
+    Object.assign(Object.create({ intervalMinutes: 5 }), { battery: scenario.battery }),
+  ])('rejects malformed router scenario %#', (invalidScenario) => {
+    expect(() => routeInterval({
+      solarKwh: 0,
+      homeKwh: 0,
+      evKwh: 0,
+      batterySocKwh: reserveKwh,
+      minuteOfDay: 0,
+    }, invalidScenario as RouterScenario)).toThrow(/invalid .*scenario/i)
+  })
+
   it('serves load before charging and exporting surplus solar', () => {
     const result = routeInterval({
       solarKwh: 1,

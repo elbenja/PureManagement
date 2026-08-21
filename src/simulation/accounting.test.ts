@@ -1,10 +1,68 @@
 import { describe, expect, it } from 'vitest'
+import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
-import { accountInterval } from './accounting'
+import { accountInterval, type AccountingScenario } from './accounting'
 
 const scenario = LOS_ANGELES_AUGUST_2026
 
 describe('accountInterval', () => {
+  it('preserves legacy defaults and accepts the annual scenario without mutation', () => {
+    const input = {
+      tou: 'high' as const,
+      homeKwh: 1,
+      evKwh: 0.5,
+      gridImportKwh: 0.4,
+      gridExportKwh: 0,
+    }
+    const augustBefore = JSON.stringify(LOS_ANGELES_AUGUST_2026)
+    const annualBefore = JSON.stringify(LOS_ANGELES_2026)
+    const legacy = accountInterval(input)
+
+    expect(accountInterval(input, LOS_ANGELES_AUGUST_2026)).toEqual(legacy)
+    expect(accountInterval(input, LOS_ANGELES_2026)).toEqual(legacy)
+    expect(JSON.stringify(LOS_ANGELES_AUGUST_2026)).toBe(augustBefore)
+    expect(JSON.stringify(LOS_ANGELES_2026)).toBe(annualBefore)
+  })
+
+  it('uses rates and emissions from the supplied scenario', () => {
+    const custom: AccountingScenario = {
+      tariff: { energyRatesUsdPerKwh: { base: 1, low: 2, high: 3 } },
+      emissions: { kgCo2ePerKwh: 4 },
+    }
+    const result = accountInterval({
+      tou: 'low',
+      homeKwh: 0.5,
+      evKwh: 0.25,
+      gridImportKwh: 0.25,
+      gridExportKwh: 0,
+    }, custom)
+
+    expect(result.importRate).toBe(2)
+    expect(result.exportRate).toBe(2)
+    expect(result.importCost).toBe(0.5)
+    expect(result.counterfactualCost).toBe(1.5)
+    expect(result.avoidedCo2Kg).toBe(2)
+  })
+
+  it.each([
+    null,
+    {},
+    { tariff: null, emissions: scenario.emissions },
+    { tariff: { energyRatesUsdPerKwh: { base: 1, low: 2 } }, emissions: scenario.emissions },
+    { tariff: { energyRatesUsdPerKwh: { base: 1, low: -1, high: 3 } }, emissions: scenario.emissions },
+    { tariff: scenario.tariff, emissions: { kgCo2ePerKwh: Number.POSITIVE_INFINITY } },
+    { tariff: { energyRatesUsdPerKwh: Object.create(scenario.tariff.energyRatesUsdPerKwh) }, emissions: scenario.emissions },
+    { tariff: { energyRatesUsdPerKwh: { ...scenario.tariff.energyRatesUsdPerKwh, shoulder: 1 } }, emissions: scenario.emissions },
+  ])('rejects malformed accounting scenario %#', (invalidScenario) => {
+    expect(() => accountInterval({
+      tou: 'base',
+      homeKwh: 0,
+      evKwh: 0,
+      gridImportKwh: 0,
+      gridExportKwh: 0,
+    }, invalidScenario as AccountingScenario)).toThrow(/invalid .*scenario/i)
+  })
+
   it('calculates high-period costs, counterfactual cost, and savings', () => {
     const result = accountInterval({
       tou: 'high',

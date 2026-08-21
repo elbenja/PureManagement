@@ -9,6 +9,16 @@ export interface RouterInput {
   minuteOfDay: number
 }
 
+export interface RouterScenario {
+  readonly intervalMinutes: number
+  readonly battery: {
+    readonly capacityKwh: number
+    readonly maxPowerKw: number
+    readonly roundTripEfficiency: number
+    readonly reservePercent: number
+  }
+}
+
 export interface RouterResult {
   batteryChargeKw: number
   batteryChargeKwh: number
@@ -24,11 +34,6 @@ export interface RouterResult {
   transfers: Transfer[]
 }
 
-const scenario = LOS_ANGELES_AUGUST_2026
-const intervalHours = scenario.intervalMinutes / 60
-const batteryEfficiency = Math.sqrt(scenario.battery.roundTripEfficiency)
-const reserveKwh = scenario.battery.capacityKwh * (scenario.battery.reservePercent / 100)
-const maxAcKwhPerInterval = scenario.battery.maxPowerKw * intervalHours
 const dispatchStartMinute = 13 * 60
 const dispatchEndMinute = 20 * 60
 const invariantTolerance = 1e-10
@@ -37,6 +42,77 @@ const routingEpsilon = invariantTolerance / 100
 const maximumOmittedRouteKwh = maximumTransferCount * routingEpsilon
 
 type LoadAllocation = { homeKwh: number; evKwh: number; remainingKwh: number }
+
+interface RouterConstants {
+  intervalHours: number
+  batteryEfficiency: number
+  reserveKwh: number
+  maxAcKwhPerInterval: number
+}
+
+const frozenScenarioConstants = new WeakMap<object, RouterConstants>()
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key)
+
+const scenarioConstants = (scenario: RouterScenario): RouterConstants => {
+  if (!isObject(scenario)) throw new Error('Invalid router scenario')
+  if (!hasOwn(scenario, 'intervalMinutes') || !hasOwn(scenario, 'battery')) {
+    throw new Error('Invalid router scenario shape')
+  }
+  const cached = frozenScenarioConstants.get(scenario)
+  if (cached !== undefined) return cached
+  const battery = scenario.battery
+  if (!isObject(battery)) throw new Error('Invalid router scenario battery')
+  if (!['capacityKwh', 'maxPowerKw', 'roundTripEfficiency', 'reservePercent'].every(
+    (field) => hasOwn(battery, field),
+  )) throw new Error('Invalid router scenario battery shape')
+  const { intervalMinutes } = scenario
+  if (
+    !Number.isInteger(intervalMinutes) ||
+    intervalMinutes <= 0 ||
+    intervalMinutes > 24 * 60 ||
+    (24 * 60) % intervalMinutes !== 0
+  ) {
+    throw new Error('Invalid router scenario intervalMinutes')
+  }
+  if (!Number.isFinite(battery.capacityKwh) || battery.capacityKwh <= 0) {
+    throw new Error('Invalid router scenario battery capacityKwh')
+  }
+  if (!Number.isFinite(battery.maxPowerKw) || battery.maxPowerKw <= 0) {
+    throw new Error('Invalid router scenario battery maxPowerKw')
+  }
+  if (
+    !Number.isFinite(battery.roundTripEfficiency) ||
+    battery.roundTripEfficiency <= 0 ||
+    battery.roundTripEfficiency > 1
+  ) {
+    throw new Error('Invalid router scenario battery roundTripEfficiency')
+  }
+  if (
+    !Number.isFinite(battery.reservePercent) ||
+    battery.reservePercent < 0 ||
+    battery.reservePercent >= 100
+  ) {
+    throw new Error('Invalid router scenario battery reservePercent')
+  }
+
+  const intervalHours = intervalMinutes / 60
+  const batteryEfficiency = Math.sqrt(battery.roundTripEfficiency)
+  const reserveKwh = battery.capacityKwh * (battery.reservePercent / 100)
+  const maxAcKwhPerInterval = battery.maxPowerKw * intervalHours
+  if (![intervalHours, batteryEfficiency, reserveKwh, maxAcKwhPerInterval].every(Number.isFinite)) {
+    throw new Error('Invalid router scenario derived values')
+  }
+
+  const constants = { intervalHours, batteryEfficiency, reserveKwh, maxAcKwhPerInterval }
+  if (Object.isFrozen(scenario) && Object.isFrozen(battery)) {
+    frozenScenarioConstants.set(scenario, constants)
+  }
+  return constants
+}
 
 const nonNegative = (value: number) => (value <= routingEpsilon ? 0 : value)
 
@@ -64,6 +140,7 @@ const addTransfer = (
   source: EnergyNode,
   destination: EnergyNode,
   kwh: number,
+  intervalHours: number,
 ) => {
   if (kwh <= routingEpsilon) return
 
@@ -75,7 +152,11 @@ const addTransfer = (
   })
 }
 
-const validateInput = (input: RouterInput) => {
+const validateInput = (
+  input: RouterInput,
+  scenario: RouterScenario,
+  { intervalHours, reserveKwh }: RouterConstants,
+) => {
   const energyFields: Array<keyof Pick<RouterInput, 'solarKwh' | 'homeKwh' | 'evKwh'>> = [
     'solarKwh',
     'homeKwh',
@@ -118,7 +199,12 @@ const validateInput = (input: RouterInput) => {
   }
 }
 
-const verifyResult = (input: RouterInput, result: RouterResult) => {
+const verifyResult = (
+  input: RouterInput,
+  result: RouterResult,
+  scenario: RouterScenario,
+  { intervalHours, reserveKwh }: RouterConstants,
+) => {
   const numericValues = [
     result.batteryChargeKw,
     result.batteryChargeKwh,
@@ -222,8 +308,13 @@ const verifyResult = (input: RouterInput, result: RouterResult) => {
   }
 }
 
-export const routeInterval = (input: RouterInput): RouterResult => {
-  validateInput(input)
+export const routeInterval = (
+  input: RouterInput,
+  scenario: RouterScenario = LOS_ANGELES_AUGUST_2026,
+): RouterResult => {
+  const constants = scenarioConstants(scenario)
+  const { intervalHours, batteryEfficiency, reserveKwh, maxAcKwhPerInterval } = constants
+  validateInput(input, scenario, constants)
 
   if (maximumOmittedRouteKwh >= invariantTolerance) {
     throw new Error('Router invariant failed: routing epsilon exceeds reconciliation tolerance')
@@ -231,8 +322,8 @@ export const routeInterval = (input: RouterInput): RouterResult => {
 
   const transfers: Transfer[] = []
   const solarAllocation = allocateLoad(input.solarKwh, input.homeKwh, input.evKwh)
-  addTransfer(transfers, 'solar', 'home', solarAllocation.homeKwh)
-  addTransfer(transfers, 'solar', 'ev', solarAllocation.evKwh)
+  addTransfer(transfers, 'solar', 'home', solarAllocation.homeKwh, intervalHours)
+  addTransfer(transfers, 'solar', 'ev', solarAllocation.evKwh, intervalHours)
 
   const remainingHomeKwh = nonNegative(input.homeKwh - solarAllocation.homeKwh)
   const remainingEvKwh = nonNegative(input.evKwh - solarAllocation.evKwh)
@@ -248,8 +339,8 @@ export const routeInterval = (input: RouterInput): RouterResult => {
   const chargeLossKwh = nonNegative(chargeAcKwh - batteryChargeKwh)
   const solarExportKwh = nonNegative(solarAllocation.remainingKwh - chargeAcKwh)
 
-  addTransfer(transfers, 'solar', 'battery', chargeAcKwh)
-  addTransfer(transfers, 'solar', 'grid', solarExportKwh)
+  addTransfer(transfers, 'solar', 'battery', chargeAcKwh, intervalHours)
+  addTransfer(transfers, 'solar', 'grid', solarExportKwh, intervalHours)
 
   const demandKwh = remainingHomeKwh + remainingEvKwh
   const inDispatchWindow =
@@ -264,15 +355,15 @@ export const routeInterval = (input: RouterInput): RouterResult => {
   const dischargeLossKwh = nonNegative(batteryDischargeKwh - batteryDeliveredKwh)
   const batteryAllocation = allocateLoad(batteryDeliveredKwh, remainingHomeKwh, remainingEvKwh)
 
-  addTransfer(transfers, 'battery', 'home', batteryAllocation.homeKwh)
-  addTransfer(transfers, 'battery', 'ev', batteryAllocation.evKwh)
+  addTransfer(transfers, 'battery', 'home', batteryAllocation.homeKwh, intervalHours)
+  addTransfer(transfers, 'battery', 'ev', batteryAllocation.evKwh, intervalHours)
 
   const gridHomeKwh = nonNegative(remainingHomeKwh - batteryAllocation.homeKwh)
   const gridEvKwh = nonNegative(remainingEvKwh - batteryAllocation.evKwh)
   const gridImportKwh = gridHomeKwh + gridEvKwh
 
-  addTransfer(transfers, 'grid', 'home', gridHomeKwh)
-  addTransfer(transfers, 'grid', 'ev', gridEvKwh)
+  addTransfer(transfers, 'grid', 'home', gridHomeKwh, intervalHours)
+  addTransfer(transfers, 'grid', 'ev', gridEvKwh, intervalHours)
 
   const result: RouterResult = {
     batteryChargeKw: batteryChargeKwh / intervalHours,
@@ -289,6 +380,6 @@ export const routeInterval = (input: RouterInput): RouterResult => {
     transfers,
   }
 
-  verifyResult(input, result)
+  verifyResult(input, result, scenario, constants)
   return result
 }

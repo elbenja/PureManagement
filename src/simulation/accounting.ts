@@ -9,6 +9,15 @@ export interface AccountingInput {
   gridExportKwh: number
 }
 
+export interface AccountingScenario {
+  readonly tariff: {
+    readonly energyRatesUsdPerKwh: Readonly<Record<TouPeriod, number>>
+  }
+  readonly emissions: {
+    readonly kgCo2ePerKwh: number
+  }
+}
+
 export interface AccountingResult {
   importRate: number
   exportRate: number
@@ -19,11 +28,43 @@ export interface AccountingResult {
   avoidedCo2Kg: number
 }
 
-const scenario = LOS_ANGELES_AUGUST_2026
 const simultaneousGridTolerance = 1e-10
+const validatedFrozenScenarios = new WeakSet<object>()
 
 const isTouPeriod = (value: unknown): value is TouPeriod =>
   value === 'base' || value === 'low' || value === 'high'
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const hasOwn = (value: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(value, key)
+
+const validateScenario = (scenario: AccountingScenario) => {
+  if (!isObject(scenario) || !isObject(scenario.tariff) || !isObject(scenario.emissions)) {
+    throw new Error('Invalid accounting scenario shape')
+  }
+  if (
+    !hasOwn(scenario, 'tariff') || !hasOwn(scenario, 'emissions') ||
+    !hasOwn(scenario.tariff, 'energyRatesUsdPerKwh') ||
+    !hasOwn(scenario.emissions, 'kgCo2ePerKwh')
+  ) throw new Error('Invalid accounting scenario shape')
+  if (validatedFrozenScenarios.has(scenario)) return
+  const rates = scenario.tariff.energyRatesUsdPerKwh
+  const periods = ['base', 'low', 'high'] as const
+  if (
+    !isObject(rates) || Reflect.ownKeys(rates).length !== periods.length ||
+    !periods.every((period) => hasOwn(rates, period) && Number.isFinite(rates[period]) && rates[period] > 0)
+  ) {
+    throw new Error('Invalid accounting scenario energy rates')
+  }
+  if (!Number.isFinite(scenario.emissions.kgCo2ePerKwh) || scenario.emissions.kgCo2ePerKwh <= 0) {
+    throw new Error('Invalid accounting scenario emissions')
+  }
+  if (
+    Object.isFrozen(scenario) && Object.isFrozen(scenario.tariff) &&
+    Object.isFrozen(rates) && Object.isFrozen(scenario.emissions)
+  ) validatedFrozenScenarios.add(scenario)
+}
 
 const validateInput = (input: AccountingInput) => {
   if (!isTouPeriod(input.tou)) throw new Error('Invalid tou')
@@ -49,7 +90,11 @@ const validateInput = (input: AccountingInput) => {
   }
 }
 
-export const accountInterval = (input: AccountingInput): AccountingResult => {
+export const accountInterval = (
+  input: AccountingInput,
+  scenario: AccountingScenario = LOS_ANGELES_AUGUST_2026,
+): AccountingResult => {
+  validateScenario(scenario)
   validateInput(input)
 
   const importRate = scenario.tariff.energyRatesUsdPerKwh[input.tou]
