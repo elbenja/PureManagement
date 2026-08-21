@@ -220,6 +220,7 @@ interface HistoryPrefixCache {
 }
 
 const historyPrefixCaches = new WeakMap<readonly EnergyInterval[], HistoryPrefixCache>()
+const historyPrefixThreshold = 32_768
 
 const historyCacheFields = [
   'index',
@@ -249,21 +250,28 @@ const historyCacheFields = [
 
 const transferCacheFields = ['source', 'destination', 'kw', 'kwh'] as const
 
-const hasOwnDataProperty = (value: object, key: PropertyKey): boolean => {
+const hasOwnImmutableDataProperty = (value: object, key: PropertyKey): boolean => {
   const descriptor = Object.getOwnPropertyDescriptor(value, key)
-  return descriptor !== undefined && 'value' in descriptor
+  return descriptor !== undefined &&
+    'value' in descriptor &&
+    descriptor.writable === false &&
+    descriptor.configurable === false
 }
 
 const isStableTransferList = (transfers: readonly Transfer[]): boolean => {
-  if (!Array.isArray(transfers) || !Object.isFrozen(transfers)) return false
+  if (
+    !Array.isArray(transfers) ||
+    Object.isExtensible(transfers) ||
+    !hasOwnImmutableDataProperty(transfers, 'length')
+  ) return false
 
   for (let index = 0; index < transfers.length; index += 1) {
-    if (!hasOwnDataProperty(transfers, index)) return false
+    if (!hasOwnImmutableDataProperty(transfers, index)) return false
     const transfer = transfers[index]!
     if (
       Object.getPrototypeOf(transfer) !== Object.prototype ||
-      !Object.isFrozen(transfer) ||
-      !transferCacheFields.every((field) => hasOwnDataProperty(transfer, field))
+      Object.isExtensible(transfer) ||
+      !transferCacheFields.every((field) => hasOwnImmutableDataProperty(transfer, field))
     ) return false
   }
 
@@ -271,15 +279,19 @@ const isStableTransferList = (transfers: readonly Transfer[]): boolean => {
 }
 
 const isStableHistoryLedger = (records: readonly EnergyInterval[]): boolean => {
-  if (!Array.isArray(records) || !Object.isFrozen(records)) return false
+  if (
+    !Array.isArray(records) ||
+    Object.isExtensible(records) ||
+    !hasOwnImmutableDataProperty(records, 'length')
+  ) return false
 
   for (let index = 0; index < records.length; index += 1) {
-    if (!hasOwnDataProperty(records, index)) return false
+    if (!hasOwnImmutableDataProperty(records, index)) return false
     const record = records[index]!
     if (
       Object.getPrototypeOf(record) !== Object.prototype ||
-      !Object.isFrozen(record) ||
-      !historyCacheFields.every((field) => hasOwnDataProperty(record, field)) ||
+      Object.isExtensible(record) ||
+      !historyCacheFields.every((field) => hasOwnImmutableDataProperty(record, field)) ||
       !isStableTransferList(record.transfers)
     ) return false
   }
@@ -694,7 +706,11 @@ export const getHistoryView = (
   const selectedRecords = records.slice(window.start, window.end + 1)
   const startRecord = selectedRecords[0]!
   const endRecord = selectedRecords[selectedRecords.length - 1]!
-  const prefixCache = getHistoryPrefixCache(records)
+  const prefixCache = historyPrefixCaches.get(records) ?? (
+    selectedRecords.length >= historyPrefixThreshold
+      ? getHistoryPrefixCache(records)
+      : null
+  )
 
   return {
     records: selectedRecords,

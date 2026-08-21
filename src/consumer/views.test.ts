@@ -8,6 +8,7 @@ import {
   rangeSlots,
   type EnergyTotals,
 } from '../simulation/aggregate'
+import * as aggregateModule from '../simulation/aggregate'
 import * as viewsModule from './views'
 import { getHistoryView, getLiveFrame, type HistoryView } from './views'
 
@@ -307,6 +308,31 @@ describe('annual history views', () => {
     })
   }
 
+  it('keeps a cold 24h query bounded to its selected records without building prefixes', () => {
+    const getValidationStats = (
+      aggregateModule as typeof aggregateModule & {
+        __getRecordRangeValidationStats?: (source: readonly EnergyInterval[]) => {
+          recordReads: number
+        } | null
+      }
+    ).__getRecordRangeValidationStats
+    const getPrefixStats = (
+      viewsModule as typeof viewsModule & {
+        __getHistoryPrefixCacheStats?: (source: readonly EnergyInterval[]) => unknown
+      }
+    ).__getHistoryPrefixCacheStats
+
+    expect(getValidationStats).toBeTypeOf('function')
+    expect(getPrefixStats).toBeTypeOf('function')
+    const before = getValidationStats!(records)?.recordReads ?? 0
+    const view = getHistoryView(records, '24h', records.length - 1)!
+    const after = getValidationStats!(records)!.recordReads
+
+    expect(view.records).toHaveLength(288)
+    expect(after - before).toBeLessThanOrEqual(288)
+    expect(getPrefixStats!(records)).toBeNull()
+  })
+
   it.each([
     ['24h', 'Last 24h'],
     ['7d', 'Last week'],
@@ -392,6 +418,7 @@ describe('annual history views', () => {
   })
 
   it('matches direct totals and bucket averages across cached annual ranges and slices', () => {
+    getHistoryView(records, 'ytd', records.length - 1)
     const annualCases = [
       getHistoryView(records, '24h', indexAt(8, 15, 12 * 60))!,
       getHistoryView(records, 'month', indexAt(3, 15, 12 * 60))!,
@@ -415,17 +442,37 @@ describe('annual history views', () => {
         } | null
       }
     ).__getHistoryPrefixCacheStats
+    const getValidationStats = (
+      aggregateModule as typeof aggregateModule & {
+        __getRecordRangeValidationStats?: (source: readonly EnergyInterval[]) => {
+          recordReads: number
+          calendarBoundaryReads: number
+        } | null
+      }
+    ).__getRecordRangeValidationStats
 
     expect(getCacheStats).toBeTypeOf('function')
+    expect(getValidationStats).toBeTypeOf('function')
     getHistoryView(records, 'ytd', records.length - 1)
     const warmed = getCacheStats!(records)!
+    const warmedValidation = getValidationStats!(records)!
+    getHistoryView(records, '24h', records.length - 1)
+    const afterShortRange = getCacheStats!(records)!
     getHistoryView(records, 'ytd', records.length - 1)
     const repeated = getCacheStats!(records)!
+    const repeatedValidation = getValidationStats!(records)!
 
     expect(repeated.buildCount).toBe(1)
     expect(warmed.sourceRecordReads).toBe(records.length)
+    expect(afterShortRange.sourceRecordReads).toBe(warmed.sourceRecordReads)
+    expect(afterShortRange.prefixValueReads).toBeGreaterThan(warmed.prefixValueReads)
+    expect(afterShortRange.prefixValueReads - warmed.prefixValueReads).toBeLessThanOrEqual(
+      2 * (13 + 6 * 288),
+    )
     expect(repeated.sourceRecordReads).toBe(warmed.sourceRecordReads)
-    expect(repeated.prefixValueReads - warmed.prefixValueReads).toBeLessThanOrEqual(
+    expect(warmedValidation.calendarBoundaryReads).toBeGreaterThan(0)
+    expect(repeatedValidation.calendarBoundaryReads).toBe(warmedValidation.calendarBoundaryReads)
+    expect(repeated.prefixValueReads - afterShortRange.prefixValueReads).toBeLessThanOrEqual(
       2 * (13 + 6 * 2_048),
     )
   })
@@ -443,6 +490,16 @@ describe('annual history views', () => {
     solarKw = Number.NaN
 
     expect(() => getHistoryView(source, '24h', 0)).toThrow(/record 0.*history/i)
+  })
+
+  it('treats malformed values outside a short selection equally for frozen and mutable ledgers', () => {
+    const mutable = generateMonth().slice(0, 400).map((record, index) =>
+      index === 0 ? { ...record, solarKw: Number.NaN } : record)
+    const frozen = Object.freeze(mutable.map((record) =>
+      Object.isFrozen(record) ? record : Object.freeze(record)))
+
+    expect(() => getHistoryView(mutable, '24h', 399)).not.toThrow()
+    expect(() => getHistoryView(frozen, '24h', 399)).not.toThrow()
   })
 
   it('keeps the legacy August 7d series raw', () => {

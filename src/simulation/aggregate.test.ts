@@ -362,6 +362,15 @@ describe('getRangeWindow', () => {
     expect(source.every((record, index) => record === before[index])).toBe(true)
   })
 
+  it('does not inspect malformed calendar data outside a fixed selected window', () => {
+    const mutable = Array.from({ length: 400 }, (_, index) => interval({ index }))
+    mutable[0]!.month = 13
+    const frozen = Object.freeze(mutable.map((record) => Object.freeze({ ...record })))
+
+    expect(getRangeWindow(mutable, '24h', 399)).toMatchObject({ start: 112, end: 399 })
+    expect(getRangeWindow(frozen, '24h', 399)).toMatchObject({ start: 112, end: 399 })
+  })
+
   it('does not cache accessor-backed frozen structural fields', () => {
     let recordIndex = 0
     const record = interval()
@@ -375,6 +384,22 @@ describe('getRangeWindow', () => {
     recordIndex = -1
 
     expect(() => getRangeWindow(source, '24h', 0)).toThrow(/record 0/i)
+  })
+
+  it('does not cache accessor-backed calendar boundaries', () => {
+    let boundaryMonth = 1
+    const boundary = interval({ index: 0, month: 1, day: 1 })
+    Object.defineProperty(boundary, 'month', {
+      enumerable: true,
+      get: () => boundaryMonth,
+    })
+    const anchor = interval({ index: 1, month: 2, day: 1 })
+    const source = Object.freeze([Object.freeze(boundary), Object.freeze(anchor)])
+
+    expect(getRangeWindow(source, 'month', 1).start).toBe(1)
+    boundaryMonth = 2
+
+    expect(getRangeWindow(source, 'month', 1).start).toBe(0)
   })
 
   it('revalidates mutable ledgers after a successful call', () => {

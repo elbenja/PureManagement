@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { EnergyInterval, WeatherState } from '../domain/energy'
+import * as aggregateModule from '../simulation/aggregate'
+import { getRangeWindow } from '../simulation/aggregate'
 import { generateYear } from '../simulation/generateYear'
 import { getDailyOutlook } from './outlook'
 
@@ -17,6 +19,25 @@ describe('getDailyOutlook', () => {
   const recordsForDate = (year: number, month: number, day: number) =>
     records.filter((record) =>
       record.year === year && record.month === month && record.day === day)
+
+  it('reuses immutable structural validation from an equivalent 24h history window', () => {
+    const getValidationStats = (
+      aggregateModule as typeof aggregateModule & {
+        __getRecordRangeValidationStats?: (source: readonly EnergyInterval[]) => {
+          recordReads: number
+        } | null
+      }
+    ).__getRecordRangeValidationStats
+    expect(getValidationStats).toBeTypeOf('function')
+
+    const anchor = indexAt(2, 15, 23 * 60 + 55)
+    getRangeWindow(records, '24h', anchor)
+    const afterHistory = getValidationStats!(records)!.recordReads
+    getDailyOutlook(records, anchor, 1)
+    const afterOutlook = getValidationStats!(records)!.recordReads
+
+    expect(afterOutlook).toBe(afterHistory)
+  })
 
   it('returns seven distinct local dates starting with an arbitrary anchor date', () => {
     const outlook = getDailyOutlook(records, indexAt(2, 15, 13 * 60 + 20))
@@ -133,7 +154,7 @@ describe('getDailyOutlook', () => {
   ] as const)('rejects malformed %s outlook inputs', (field, value) => {
     const malformed = [{ ...records[0]!, [field]: value }] as EnergyInterval[]
 
-    expect(() => getDailyOutlook(malformed, 0, 1)).toThrow(/record 0.*outlook/i)
+    expect(() => getDailyOutlook(malformed, 0, 1)).toThrow(/record 0.*(?:outlook|canonical)/i)
   })
 
   it.each(['solarKwh', 'precipitationInches'] as const)(

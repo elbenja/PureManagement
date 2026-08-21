@@ -1,4 +1,5 @@
 import type { EnergyInterval, WeatherState } from '../domain/energy'
+import { validateRecordRange } from '../simulation/aggregate'
 
 export interface DailyOutlook {
   date: string
@@ -18,40 +19,6 @@ const weatherStates: readonly WeatherState[] = [
 
 const dryWeatherTieOrder = ['overcast', 'partly-cloudy', 'clear'] as const
 
-const validatedFrozenOutlookRecords = new WeakSet<readonly EnergyInterval[]>()
-
-const outlookCacheFields = [
-  'index',
-  'year',
-  'month',
-  'day',
-  'temperatureF',
-  'precipitationInches',
-  'solarKwh',
-  'weatherState',
-] as const
-
-const hasOwnDataProperty = (value: object, key: PropertyKey): boolean => {
-  const descriptor = Object.getOwnPropertyDescriptor(value, key)
-  return descriptor !== undefined && 'value' in descriptor
-}
-
-const isStableOutlookLedger = (records: readonly EnergyInterval[]): boolean => {
-  if (!Array.isArray(records) || !Object.isFrozen(records)) return false
-
-  for (let index = 0; index < records.length; index += 1) {
-    if (!hasOwnDataProperty(records, index)) return false
-    const record = records[index]!
-    if (
-      Object.getPrototypeOf(record) !== Object.prototype ||
-      !Object.isFrozen(record) ||
-      !outlookCacheFields.every((field) => hasOwnDataProperty(record, field))
-    ) return false
-  }
-
-  return true
-}
-
 const clampIndex = (index: number, recordCount: number): number => {
   if (Number.isNaN(index) || index === Number.NEGATIVE_INFINITY) return 0
   if (index === Number.POSITIVE_INFINITY) return recordCount - 1
@@ -61,52 +28,20 @@ const clampIndex = (index: number, recordCount: number): number => {
 const dateKey = (record: EnergyInterval): string =>
   `${record.year}-${record.month.toString().padStart(2, '0')}-${record.day.toString().padStart(2, '0')}`
 
-const validateRecords = (records: readonly EnergyInterval[]) => {
-  if (validatedFrozenOutlookRecords.has(records)) return
-
-  let firstRecordIndex: number | null = null
-  let previousDate = Number.NEGATIVE_INFINITY
-
-  for (let index = 0; index < records.length; index += 1) {
-    const record = records[index]
-    const recordIndex = record?.index
-    if (
-      index === 0 &&
-      typeof recordIndex === 'number' &&
-      Number.isSafeInteger(recordIndex) &&
-      recordIndex >= 0
-    ) {
-      firstRecordIndex = recordIndex
-    }
-    if (
-      record === undefined ||
-      typeof recordIndex !== 'number' ||
-      !Number.isSafeInteger(recordIndex) ||
-      firstRecordIndex === null ||
-      recordIndex !== firstRecordIndex + index ||
-      !Number.isInteger(record.year) || record.year < 1 ||
-      !Number.isInteger(record.month) || record.month < 1 || record.month > 12 ||
-      !Number.isInteger(record.day) || record.day < 1 ||
-      record.day > new Date(Date.UTC(record.year, record.month, 0)).getUTCDate() ||
-      !Number.isFinite(record.temperatureF) ||
-      !Number.isFinite(record.precipitationInches) || record.precipitationInches < 0 ||
-      !Number.isFinite(record.solarKwh) || record.solarKwh < 0 ||
-      !weatherStates.includes(record.weatherState)
-    ) {
-      throw new Error(`Record ${index} contains invalid outlook values`)
-    }
-
-    const date = Date.UTC(record.year, record.month - 1, record.day)
-    if (date < previousDate) {
-      throw new Error(`Record ${index} contains invalid outlook calendar order`)
-    }
-    previousDate = date
-  }
-
-  if (isStableOutlookLedger(records)) {
-    validatedFrozenOutlookRecords.add(records)
-  }
+const validateOutlookRecord = (record: EnergyInterval, index: number) => {
+  if (
+    !Number.isFinite(record.temperatureF) ||
+    !Number.isFinite(record.precipitationInches) || record.precipitationInches < 0 ||
+    !Number.isFinite(record.solarKwh) || record.solarKwh < 0 ||
+    !weatherStates.includes(record.weatherState)
+  ) throw new Error(`Record ${index} contains invalid outlook values`)
 }
+
+const isSameLocalDate = (left: EnergyInterval | undefined, right: EnergyInterval): boolean =>
+  left !== undefined &&
+  left.year === right.year &&
+  left.month === right.month &&
+  left.day === right.day
 
 export const getDailyOutlook = (
   records: readonly EnergyInterval[],
@@ -118,17 +53,29 @@ export const getDailyOutlook = (
   }
   if (records.length === 0) return []
 
-  validateRecords(records)
   const anchor = clampIndex(anchorIndex, records.length)
+  validateRecordRange(records, anchor, anchor)
   const anchorRecord = records[anchor]!
-  const anchorDate = dateKey(anchorRecord)
   let index = anchor
-  while (index > 0 && dateKey(records[index - 1]!) === anchorDate) index -= 1
+  while (index > 0 && isSameLocalDate(records[index - 1], anchorRecord)) index -= 1
+
+  let selectedEnd = index
+  let selectedDays = 0
+  while (selectedEnd < records.length && selectedDays < days) {
+    const first = records[selectedEnd]
+    if (first === undefined || first.year !== anchorRecord.year) break
+    selectedDays += 1
+    selectedEnd += 1
+    while (
+      selectedEnd < records.length &&
+      isSameLocalDate(records[selectedEnd], first)
+    ) selectedEnd += 1
+  }
+  validateRecordRange(records, index, selectedEnd - 1)
 
   const outlook: DailyOutlook[] = []
-  while (index < records.length && outlook.length < days) {
+  while (index < selectedEnd) {
     const first = records[index]!
-    if (first.year !== anchorRecord.year) break
 
     const date = dateKey(first)
     let minTemperatureF = Number.POSITIVE_INFINITY
@@ -142,8 +89,9 @@ export const getDailyOutlook = (
       clear: 0,
     }
 
-    while (index < records.length && dateKey(records[index]!) === date) {
+    while (index < selectedEnd && dateKey(records[index]!) === date) {
       const record = records[index]!
+      validateOutlookRecord(record, index)
       minTemperatureF = Math.min(minTemperatureF, record.temperatureF)
       maxTemperatureF = Math.max(maxTemperatureF, record.temperatureF)
       precipitationInches += record.precipitationInches

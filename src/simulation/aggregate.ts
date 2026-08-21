@@ -43,29 +43,65 @@ export interface RangeWindow {
   nextAnchor: number | null
 }
 
-const validatedFrozenRangeRecords = new WeakSet<readonly EnergyInterval[]>()
-
 const rangeCacheFields = ['index', 'year', 'month', 'day'] as const
 
-const hasOwnDataProperty = (value: object, key: PropertyKey): boolean => {
+const hasOwnImmutableDataProperty = (value: object, key: PropertyKey): boolean => {
   const descriptor = Object.getOwnPropertyDescriptor(value, key)
-  return descriptor !== undefined && 'value' in descriptor
+  return descriptor !== undefined &&
+    'value' in descriptor &&
+    descriptor.writable === false &&
+    descriptor.configurable === false
 }
 
-const isStableRangeLedger = (records: readonly EnergyInterval[]): boolean => {
-  if (!Array.isArray(records) || !Object.isFrozen(records)) return false
+interface RecordRangeValidationState {
+  baseIndex: number
+  ranges: Array<{ start: number; end: number }>
+  recordReads: number
+  calendarBoundaryReads: number
+}
 
-  for (let index = 0; index < records.length; index += 1) {
-    if (!hasOwnDataProperty(records, index)) return false
-    const record = records[index]!
-    if (
-      Object.getPrototypeOf(record) !== Object.prototype ||
-      !Object.isFrozen(record) ||
-      !rangeCacheFields.every((field) => hasOwnDataProperty(record, field))
-    ) return false
+const recordRangeValidationStates = new WeakMap<
+  readonly EnergyInterval[],
+  RecordRangeValidationState
+>()
+
+interface CalendarWindowState {
+  yearStarts: Map<number, number>
+  months: Map<string, { start: number; end: number }>
+}
+
+const calendarWindowStates = new WeakMap<readonly EnergyInterval[], CalendarWindowState>()
+
+const isCovered = (
+  ranges: readonly { start: number; end: number }[],
+  start: number,
+  end: number,
+): boolean => ranges.some((range) => range.start <= start && range.end >= end)
+
+const addCoveredRange = (
+  ranges: readonly { start: number; end: number }[],
+  start: number,
+  end: number,
+): Array<{ start: number; end: number }> => {
+  const merged: Array<{ start: number; end: number }> = []
+  let nextStart = start
+  let nextEnd = end
+
+  for (const range of ranges) {
+    if (range.end + 1 < nextStart) {
+      merged.push(range)
+    } else if (nextEnd + 1 < range.start) {
+      merged.push({ start: nextStart, end: nextEnd }, range)
+      nextStart = Number.POSITIVE_INFINITY
+      nextEnd = Number.POSITIVE_INFINITY
+    } else {
+      nextStart = Math.min(nextStart, range.start)
+      nextEnd = Math.max(nextEnd, range.end)
+    }
   }
 
-  return true
+  if (Number.isFinite(nextStart)) merged.push({ start: nextStart, end: nextEnd })
+  return merged
 }
 
 const zeroTotals = (): EnergyTotals => ({
@@ -207,28 +243,54 @@ export const getTrailingWindow = (
   }
 }
 
-const validateRangeRecords = (records: readonly EnergyInterval[]) => {
-  if (validatedFrozenRangeRecords.has(records)) return
+export const validateRecordRange = (
+  records: readonly EnergyInterval[],
+  start: number,
+  end: number,
+) => {
+  if (
+    records.length === 0 ||
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    end >= records.length
+  ) throw new Error('Invalid record range')
 
-  let firstRecordIndex: number | null = null
+  const firstRecord = records[0]
+  const baseIndex = firstRecord?.index
+  if (
+    firstRecord === undefined ||
+    typeof baseIndex !== 'number' ||
+    !Number.isSafeInteger(baseIndex) ||
+    baseIndex < 0
+  ) {
+    throw new Error('Record 0 contains an invalid canonical index')
+  }
+
+  let state = recordRangeValidationStates.get(records)
+  if (state === undefined || state.baseIndex !== baseIndex) {
+    state = { baseIndex, ranges: [], recordReads: 0, calendarBoundaryReads: 0 }
+    recordRangeValidationStates.set(records, state)
+  }
+
+  const stableFirstIndex =
+    Array.isArray(records) &&
+    hasOwnImmutableDataProperty(records, 0) &&
+    Object.getPrototypeOf(firstRecord) === Object.prototype &&
+    hasOwnImmutableDataProperty(firstRecord, 'index')
+  if (stableFirstIndex && isCovered(state.ranges, start, end)) return
+
+  let stableRange = stableFirstIndex
   let previousDate = Number.NEGATIVE_INFINITY
-  for (let index = 0; index < records.length; index += 1) {
+  for (let index = start; index <= end; index += 1) {
     const record = records[index]
     const recordIndex = record?.index
-    if (
-      index === 0 &&
-      typeof recordIndex === 'number' &&
-      Number.isSafeInteger(recordIndex) &&
-      recordIndex >= 0
-    ) {
-      firstRecordIndex = recordIndex
-    }
     if (
       record === undefined ||
       typeof recordIndex !== 'number' ||
       !Number.isSafeInteger(recordIndex) ||
-      firstRecordIndex === null ||
-      recordIndex !== firstRecordIndex + index
+      recordIndex !== baseIndex + index
     ) {
       throw new Error(`Record ${index} contains an invalid canonical index`)
     }
@@ -246,11 +308,64 @@ const validateRangeRecords = (records: readonly EnergyInterval[]) => {
       throw new Error(`Record ${index} contains out-of-order calendar fields`)
     }
     previousDate = date
+    state.recordReads += 1
+    stableRange &&=
+      hasOwnImmutableDataProperty(records, index) &&
+      Object.getPrototypeOf(record) === Object.prototype &&
+      rangeCacheFields.every((field) => hasOwnImmutableDataProperty(record, field))
   }
 
-  if (isStableRangeLedger(records)) {
-    validatedFrozenRangeRecords.add(records)
+  if (stableRange) state.ranges = addCoveredRange(state.ranges, start, end)
+}
+
+/** @internal Test seam for selected-range validation work. */
+export const __getRecordRangeValidationStats = (
+  records: readonly EnergyInterval[],
+) => {
+  const state = recordRangeValidationStates.get(records)
+  return state === undefined
+    ? null
+    : {
+        recordReads: state.recordReads,
+        calendarBoundaryReads: state.calendarBoundaryReads,
+      }
+}
+
+const countCalendarBoundaryRead = (records: readonly EnergyInterval[]) => {
+  const state = recordRangeValidationStates.get(records)
+  if (state !== undefined) state.calendarBoundaryReads += 1
+}
+
+const hasStableValidatedRange = (
+  records: readonly EnergyInterval[],
+  start: number,
+  end: number,
+): boolean => {
+  const state = recordRangeValidationStates.get(records)
+  return state !== undefined && isCovered(state.ranges, start, end)
+}
+
+const hasStableCalendarBoundary = (
+  records: readonly EnergyInterval[],
+  index: number,
+): boolean => {
+  if (index < 0 || index >= records.length) {
+    return hasOwnImmutableDataProperty(records, 'length')
   }
+  const record = records[index]
+  return record !== undefined &&
+    hasOwnImmutableDataProperty(records, index) &&
+    Object.getPrototypeOf(record) === Object.prototype &&
+    rangeCacheFields.every((field) => hasOwnImmutableDataProperty(record, field))
+}
+
+const getCalendarWindowState = (records: readonly EnergyInterval[]): CalendarWindowState => {
+  let state = calendarWindowStates.get(records)
+  if (state === undefined) {
+    state = { yearStarts: new Map(), months: new Map() }
+    calendarWindowStates.set(records, state)
+  }
+  return state
 }
 
 export const getRangeWindow = (
@@ -264,12 +379,11 @@ export const getRangeWindow = (
     throw new Error('Invalid anchorIndex')
   }
 
-  validateRangeRecords(records)
-
   const end = anchorIndex
   if (isFixedTimeRange(range)) {
     const slots = rangeSlots[range]
     const start = Math.max(0, end - slots + 1)
+    validateRecordRange(records, start, end)
     return {
       start,
       end,
@@ -278,26 +392,66 @@ export const getRangeWindow = (
     }
   }
 
+  validateRecordRange(records, anchorIndex, anchorIndex)
   const anchor = records[anchorIndex]!
   let start = anchorIndex
 
   if (range === 'ytd') {
-    while (start > 0 && records[start - 1]!.year === anchor.year) start -= 1
+    const cachedStart = calendarWindowStates.get(records)?.yearStarts.get(anchor.year)
+    if (cachedStart !== undefined) {
+      start = cachedStart
+    } else {
+      while (start > 0) {
+        countCalendarBoundaryRead(records)
+        if (records[start - 1]!.year !== anchor.year) break
+        start -= 1
+      }
+    }
+    validateRecordRange(records, start, end)
+    if (
+      hasStableValidatedRange(records, start, end) &&
+      hasStableCalendarBoundary(records, start - 1)
+    ) {
+      getCalendarWindowState(records).yearStarts.set(anchor.year, start)
+    }
     return { start, end, previousAnchor: null, nextAnchor: null }
   }
 
-  while (
-    start > 0 &&
-    records[start - 1]!.year === anchor.year &&
-    records[start - 1]!.month === anchor.month
-  ) start -= 1
+  const monthKey = `${anchor.year}:${anchor.month}`
+  const cachedMonth = calendarWindowStates.get(records)?.months.get(monthKey)
+  if (cachedMonth !== undefined) {
+    validateRecordRange(records, cachedMonth.start, cachedMonth.end)
+    return {
+      start: cachedMonth.start,
+      end: cachedMonth.end,
+      previousAnchor: cachedMonth.start > 0 ? cachedMonth.start - 1 : null,
+      nextAnchor: cachedMonth.end + 1 < records.length ? cachedMonth.end + 1 : null,
+    }
+  }
+
+  while (start > 0) {
+    countCalendarBoundaryRead(records)
+    const candidate = records[start - 1]!
+    if (candidate.year !== anchor.year || candidate.month !== anchor.month) break
+    start -= 1
+  }
 
   let monthEnd = anchorIndex
-  while (
-    monthEnd + 1 < records.length &&
-    records[monthEnd + 1]!.year === anchor.year &&
-    records[monthEnd + 1]!.month === anchor.month
-  ) monthEnd += 1
+  while (monthEnd + 1 < records.length) {
+    countCalendarBoundaryRead(records)
+    const candidate = records[monthEnd + 1]!
+    if (candidate.year !== anchor.year || candidate.month !== anchor.month) break
+    monthEnd += 1
+  }
+
+  validateRecordRange(records, start, monthEnd)
+  if (
+    hasStableValidatedRange(records, start, monthEnd) &&
+    hasStableCalendarBoundary(records, start - 1) &&
+    hasStableCalendarBoundary(records, monthEnd + 1)
+  ) {
+    getCalendarWindowState(records).months.set(monthKey, { start, end: monthEnd })
+  }
 
   return {
     start,
