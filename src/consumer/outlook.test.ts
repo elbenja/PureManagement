@@ -125,6 +125,7 @@ describe('getDailyOutlook', () => {
   })
 
   it.each([
+    ['index', -1],
     ['temperatureF', Number.NaN],
     ['precipitationInches', -0.1],
     ['solarKwh', Number.POSITIVE_INFINITY],
@@ -157,26 +158,19 @@ describe('getDailyOutlook', () => {
     expect(records.every((record, index) => record === before[index])).toBe(true)
   })
 
-  it('caches successful structural validation for a deeply frozen ledger', () => {
-    let indexReads = 0
-    const source = Object.freeze([0, 1].map((index) => {
-      const record = { ...records[0]! }
-      Object.defineProperty(record, 'index', {
-        enumerable: true,
-        get: () => {
-          indexReads += 1
-          return index
-        },
-      })
-      return Object.freeze(record)
-    }))
+  it('does not cache accessor-backed frozen outlook fields', () => {
+    let weatherState: WeatherState = 'clear'
+    const record = { ...records[0]! }
+    Object.defineProperty(record, 'weatherState', {
+      enumerable: true,
+      get: () => weatherState,
+    })
+    const source = Object.freeze([Object.freeze(record)])
 
     getDailyOutlook(source, 0, 1)
-    const readsAfterFirstValidation = indexReads
-    getDailyOutlook(source, 0, 1)
+    weatherState = 'snow' as WeatherState
 
-    expect(readsAfterFirstValidation).toBe(source.length)
-    expect(indexReads).toBe(readsAfterFirstValidation)
+    expect(() => getDailyOutlook(source, 0, 1)).toThrow(/record 0.*outlook/i)
   })
 
   it('revalidates mutable ledgers after a successful call', () => {

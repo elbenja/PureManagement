@@ -20,6 +20,38 @@ const dryWeatherTieOrder = ['overcast', 'partly-cloudy', 'clear'] as const
 
 const validatedFrozenOutlookRecords = new WeakSet<readonly EnergyInterval[]>()
 
+const outlookCacheFields = [
+  'index',
+  'year',
+  'month',
+  'day',
+  'temperatureF',
+  'precipitationInches',
+  'solarKwh',
+  'weatherState',
+] as const
+
+const hasOwnDataProperty = (value: object, key: PropertyKey): boolean => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key)
+  return descriptor !== undefined && 'value' in descriptor
+}
+
+const isStableOutlookLedger = (records: readonly EnergyInterval[]): boolean => {
+  if (!Array.isArray(records) || !Object.isFrozen(records)) return false
+
+  for (let index = 0; index < records.length; index += 1) {
+    if (!hasOwnDataProperty(records, index)) return false
+    const record = records[index]!
+    if (
+      Object.getPrototypeOf(record) !== Object.prototype ||
+      !Object.isFrozen(record) ||
+      !outlookCacheFields.every((field) => hasOwnDataProperty(record, field))
+    ) return false
+  }
+
+  return true
+}
+
 const clampIndex = (index: number, recordCount: number): number => {
   if (Number.isNaN(index) || index === Number.NEGATIVE_INFINITY) return 0
   if (index === Number.POSITIVE_INFINITY) return recordCount - 1
@@ -38,7 +70,12 @@ const validateRecords = (records: readonly EnergyInterval[]) => {
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index]
     const recordIndex = record?.index
-    if (index === 0 && typeof recordIndex === 'number' && Number.isSafeInteger(recordIndex)) {
+    if (
+      index === 0 &&
+      typeof recordIndex === 'number' &&
+      Number.isSafeInteger(recordIndex) &&
+      recordIndex >= 0
+    ) {
       firstRecordIndex = recordIndex
     }
     if (
@@ -66,7 +103,7 @@ const validateRecords = (records: readonly EnergyInterval[]) => {
     previousDate = date
   }
 
-  if (Object.isFrozen(records) && records.every((record) => Object.isFrozen(record))) {
+  if (isStableOutlookLedger(records)) {
     validatedFrozenOutlookRecords.add(records)
   }
 }

@@ -344,6 +344,7 @@ describe('getRangeWindow', () => {
 
   it.each([
     ['index', { index: 1.5 }],
+    ['negative index', { index: -1 }],
     ['year', { year: Number.NaN }],
     ['month', { month: 13 }],
     ['day', { day: 0 }],
@@ -361,26 +362,19 @@ describe('getRangeWindow', () => {
     expect(source.every((record, index) => record === before[index])).toBe(true)
   })
 
-  it('caches successful structural validation for a deeply frozen ledger', () => {
-    let indexReads = 0
-    const source = Object.freeze([0, 1].map((index) => {
-      const record = interval({ index })
-      Object.defineProperty(record, 'index', {
-        enumerable: true,
-        get: () => {
-          indexReads += 1
-          return index
-        },
-      })
-      return Object.freeze(record)
-    }))
+  it('does not cache accessor-backed frozen structural fields', () => {
+    let recordIndex = 0
+    const record = interval()
+    Object.defineProperty(record, 'index', {
+      enumerable: true,
+      get: () => recordIndex,
+    })
+    const source = Object.freeze([Object.freeze(record)])
 
-    getRangeWindow(source, '24h', 1)
-    const readsAfterFirstValidation = indexReads
-    getRangeWindow(source, '24h', 1)
+    getRangeWindow(source, '24h', 0)
+    recordIndex = -1
 
-    expect(readsAfterFirstValidation).toBe(source.length)
-    expect(indexReads).toBe(readsAfterFirstValidation)
+    expect(() => getRangeWindow(source, '24h', 0)).toThrow(/record 0/i)
   })
 
   it('revalidates mutable ledgers after a successful call', () => {

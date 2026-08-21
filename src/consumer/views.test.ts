@@ -3,8 +3,13 @@ import type { EnergyInterval } from '../domain/energy'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 import { generateMonth } from '../simulation/generateMonth'
 import { generateYear } from '../simulation/generateYear'
-import { aggregateIntervals, rangeSlots } from '../simulation/aggregate'
-import { getHistoryView, getLiveFrame } from './views'
+import {
+  aggregateIntervals,
+  rangeSlots,
+  type EnergyTotals,
+} from '../simulation/aggregate'
+import * as viewsModule from './views'
+import { getHistoryView, getLiveFrame, type HistoryView } from './views'
 
 const batteryTransferKw = (
   record: ReturnType<typeof generateMonth>[number],
@@ -182,7 +187,8 @@ describe('component-ready views', () => {
     })
     expect(view.totals.energyConsumedKwh).toBeGreaterThan(0)
     expect(view.series).toHaveLength(view.records.length)
-    expect(view.series[0]).toEqual({
+    const firstPoint = view.series[0]!
+    const expectedFirstPoint = {
       index: records[6_912]!.index,
       timestamp: records[6_912]!.iso,
       solarKw: records[6_912]!.solarKw,
@@ -192,7 +198,21 @@ describe('component-ready views', () => {
         records[6_912]!.batteryDischargeKw - records[6_912]!.batteryChargeKw,
       gridImportKw: records[6_912]!.gridImportKw,
       gridExportKw: records[6_912]!.gridExportKw,
+    }
+    expect(firstPoint).toMatchObject({
+      index: expectedFirstPoint.index,
+      timestamp: expectedFirstPoint.timestamp,
     })
+    for (const key of [
+      'solarKw',
+      'homeKw',
+      'evKw',
+      'batteryNetKw',
+      'gridImportKw',
+      'gridExportKw',
+    ] as const) {
+      expect(firstPoint[key]).toBeCloseTo(expectedFirstPoint[key], 8)
+    }
   })
 
   it('charts battery net power from the same AC-side transfers as the live flow map', () => {
@@ -261,6 +281,32 @@ describe('annual history views', () => {
     records.findIndex((record) =>
       record.month === month && record.day === day && record.minuteOfDay === minuteOfDay)
 
+  const expectViewToMatchDirectAggregation = (view: HistoryView) => {
+    const expectedTotals = aggregateIntervals(view.records)
+    for (const key of Object.keys(expectedTotals) as (keyof EnergyTotals)[]) {
+      expect(view.totals[key]).toBeCloseTo(expectedTotals[key], 8)
+    }
+
+    const step = Math.ceil(view.records.length / 2_048)
+    expect(view.series).toHaveLength(Math.ceil(view.records.length / step))
+    view.series.forEach((point, pointIndex) => {
+      const bucket = view.records.slice(pointIndex * step, (pointIndex + 1) * step)
+      const finalRecord = bucket.at(-1)!
+      const average = (select: (record: EnergyInterval) => number) =>
+        bucket.reduce((total, record) => total + select(record), 0) / bucket.length
+
+      expect(point.index).toBe(finalRecord.index)
+      expect(point.timestamp).toBe(finalRecord.iso)
+      expect(point.solarKw).toBeCloseTo(average((record) => record.solarKw), 8)
+      expect(point.homeKw).toBeCloseTo(average((record) => record.homeKw), 8)
+      expect(point.evKw).toBeCloseTo(average((record) => record.evKw), 8)
+      expect(point.batteryNetKw).toBeCloseTo(average((record) =>
+        batteryTransferKw(record, 'outgoing') - batteryTransferKw(record, 'incoming')), 8)
+      expect(point.gridImportKw).toBeCloseTo(average((record) => record.gridImportKw), 8)
+      expect(point.gridExportKw).toBeCloseTo(average((record) => record.gridExportKw), 8)
+    })
+  }
+
   it.each([
     ['24h', 'Last 24h'],
     ['7d', 'Last week'],
@@ -282,7 +328,10 @@ describe('annual history views', () => {
     expect(month.records).toHaveLength(8_064)
     expect(ytd.records).toHaveLength(anchor + 1)
     for (const view of [trailing, month, ytd]) {
-      expect(view.totals).toEqual(aggregateIntervals(view.records))
+      const expected = aggregateIntervals(view.records)
+      for (const key of Object.keys(expected) as (keyof EnergyTotals)[]) {
+        expect(view.totals[key]).toBeCloseTo(expected[key], 8)
+      }
     }
     expect(month.range).toMatchObject({
       startIndex: month.records[0]!.index,
@@ -311,7 +360,7 @@ describe('annual history views', () => {
 
     expect(first.series.length).toBeLessThanOrEqual(2_048)
     expect(first.series).toEqual(second.series)
-    expect(first.series[0]).toEqual({
+    const expectedFirstPoint = {
       index: firstBucket.at(-1)!.index,
       timestamp: firstBucket.at(-1)!.iso,
       solarKw: average((record) => record.solarKw),
@@ -321,11 +370,79 @@ describe('annual history views', () => {
         batteryTransferKw(record, 'outgoing') - batteryTransferKw(record, 'incoming')),
       gridImportKw: average((record) => record.gridImportKw),
       gridExportKw: average((record) => record.gridExportKw),
+    }
+    expect(first.series[0]).toMatchObject({
+      index: expectedFirstPoint.index,
+      timestamp: expectedFirstPoint.timestamp,
     })
+    for (const key of [
+      'solarKw',
+      'homeKw',
+      'evKw',
+      'batteryNetKw',
+      'gridImportKw',
+      'gridExportKw',
+    ] as const) {
+      expect(first.series[0]![key]).toBeCloseTo(expectedFirstPoint[key], 8)
+    }
     expect(first.series.at(-1)).toMatchObject({
       index: first.records.at(-1)!.index,
       timestamp: first.records.at(-1)!.iso,
     })
+  })
+
+  it('matches direct totals and bucket averages across cached annual ranges and slices', () => {
+    const annualCases = [
+      getHistoryView(records, '24h', indexAt(8, 15, 12 * 60))!,
+      getHistoryView(records, 'month', indexAt(3, 15, 12 * 60))!,
+      getHistoryView(records, 'ytd', records.length - 1)!,
+    ]
+    const frozenSlice = Object.freeze(records.slice(100, 500))
+    const sliceView = getHistoryView(frozenSlice, '24h', frozenSlice.length - 1)!
+
+    for (const view of [...annualCases, sliceView]) {
+      expectViewToMatchDirectAggregation(view)
+    }
+  })
+
+  it('reuses compact prefixes for warm late-year YTD queries', () => {
+    const getCacheStats = (
+      viewsModule as typeof viewsModule & {
+        __getHistoryPrefixCacheStats?: (source: readonly EnergyInterval[]) => {
+          buildCount: number
+          sourceRecordReads: number
+          prefixValueReads: number
+        } | null
+      }
+    ).__getHistoryPrefixCacheStats
+
+    expect(getCacheStats).toBeTypeOf('function')
+    getHistoryView(records, 'ytd', records.length - 1)
+    const warmed = getCacheStats!(records)!
+    getHistoryView(records, 'ytd', records.length - 1)
+    const repeated = getCacheStats!(records)!
+
+    expect(repeated.buildCount).toBe(1)
+    expect(warmed.sourceRecordReads).toBe(records.length)
+    expect(repeated.sourceRecordReads).toBe(warmed.sourceRecordReads)
+    expect(repeated.prefixValueReads - warmed.prefixValueReads).toBeLessThanOrEqual(
+      2 * (13 + 6 * 2_048),
+    )
+  })
+
+  it('does not cache accessor-backed frozen history values', () => {
+    let solarKw = records[0]!.solarKw
+    const record = { ...records[0]! }
+    Object.defineProperty(record, 'solarKw', {
+      enumerable: true,
+      get: () => solarKw,
+    })
+    const source = Object.freeze([Object.freeze(record)])
+
+    getHistoryView(source, '24h', 0)
+    solarKw = Number.NaN
+
+    expect(() => getHistoryView(source, '24h', 0)).toThrow(/record 0.*history/i)
   })
 
   it('keeps the legacy August 7d series raw', () => {
@@ -363,6 +480,16 @@ describe('annual history views', () => {
       index >= selected.length - 2 ? { ...record, solarKw: Number.MAX_VALUE } : record)
 
     expect(() => getHistoryView(source, '31d', source.length - 1)).toThrow(/overflow/i)
+  })
+
+  it('rejects overflow produced by a cached prefix difference', () => {
+    const source = Object.freeze(generateMonth().slice(0, 289).map((record, index) =>
+      Object.freeze({
+        ...record,
+        savings: index === 0 ? -Number.MAX_VALUE : index <= 2 ? Number.MAX_VALUE : 0,
+      })))
+
+    expect(() => getHistoryView(source, '24h', 288)).toThrow(/overflow/i)
   })
 
   it('does not mutate annual records while selecting and sampling', () => {

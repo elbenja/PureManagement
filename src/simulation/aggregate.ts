@@ -45,6 +45,29 @@ export interface RangeWindow {
 
 const validatedFrozenRangeRecords = new WeakSet<readonly EnergyInterval[]>()
 
+const rangeCacheFields = ['index', 'year', 'month', 'day'] as const
+
+const hasOwnDataProperty = (value: object, key: PropertyKey): boolean => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key)
+  return descriptor !== undefined && 'value' in descriptor
+}
+
+const isStableRangeLedger = (records: readonly EnergyInterval[]): boolean => {
+  if (!Array.isArray(records) || !Object.isFrozen(records)) return false
+
+  for (let index = 0; index < records.length; index += 1) {
+    if (!hasOwnDataProperty(records, index)) return false
+    const record = records[index]!
+    if (
+      Object.getPrototypeOf(record) !== Object.prototype ||
+      !Object.isFrozen(record) ||
+      !rangeCacheFields.every((field) => hasOwnDataProperty(record, field))
+    ) return false
+  }
+
+  return true
+}
+
 const zeroTotals = (): EnergyTotals => ({
   solarKwh: 0,
   homeKwh: 0,
@@ -192,7 +215,12 @@ const validateRangeRecords = (records: readonly EnergyInterval[]) => {
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index]
     const recordIndex = record?.index
-    if (index === 0 && typeof recordIndex === 'number' && Number.isSafeInteger(recordIndex)) {
+    if (
+      index === 0 &&
+      typeof recordIndex === 'number' &&
+      Number.isSafeInteger(recordIndex) &&
+      recordIndex >= 0
+    ) {
       firstRecordIndex = recordIndex
     }
     if (
@@ -220,7 +248,7 @@ const validateRangeRecords = (records: readonly EnergyInterval[]) => {
     previousDate = date
   }
 
-  if (Object.isFrozen(records) && records.every((record) => Object.isFrozen(record))) {
+  if (isStableRangeLedger(records)) {
     validatedFrozenRangeRecords.add(records)
   }
 }

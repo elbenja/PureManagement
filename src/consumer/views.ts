@@ -201,6 +201,310 @@ const validateHistoryRecord = (record: EnergyInterval, index: number) => {
   }
 }
 
+type TotalPrefixArrays = Record<keyof EnergyTotals, Float64Array>
+type ChartPrefixKey =
+  | 'solarKw'
+  | 'homeKw'
+  | 'evKw'
+  | 'batteryNetKw'
+  | 'gridImportKw'
+  | 'gridExportKw'
+type ChartPrefixArrays = Record<ChartPrefixKey, Float64Array>
+
+interface HistoryPrefixCache {
+  totals: TotalPrefixArrays
+  chart: ChartPrefixArrays
+  buildCount: 1
+  sourceRecordReads: number
+  prefixValueReads: number
+}
+
+const historyPrefixCaches = new WeakMap<readonly EnergyInterval[], HistoryPrefixCache>()
+
+const historyCacheFields = [
+  'index',
+  'iso',
+  'year',
+  'month',
+  'day',
+  'solarKwh',
+  'homeKwh',
+  'evKwh',
+  'batteryChargeKwh',
+  'batteryDischargeKwh',
+  'gridImportKwh',
+  'gridExportKwh',
+  'importCost',
+  'exportCredit',
+  'counterfactualCost',
+  'savings',
+  'avoidedCo2Kg',
+  'solarKw',
+  'homeKw',
+  'evKw',
+  'gridImportKw',
+  'gridExportKw',
+  'transfers',
+] as const
+
+const transferCacheFields = ['source', 'destination', 'kw', 'kwh'] as const
+
+const hasOwnDataProperty = (value: object, key: PropertyKey): boolean => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key)
+  return descriptor !== undefined && 'value' in descriptor
+}
+
+const isStableTransferList = (transfers: readonly Transfer[]): boolean => {
+  if (!Array.isArray(transfers) || !Object.isFrozen(transfers)) return false
+
+  for (let index = 0; index < transfers.length; index += 1) {
+    if (!hasOwnDataProperty(transfers, index)) return false
+    const transfer = transfers[index]!
+    if (
+      Object.getPrototypeOf(transfer) !== Object.prototype ||
+      !Object.isFrozen(transfer) ||
+      !transferCacheFields.every((field) => hasOwnDataProperty(transfer, field))
+    ) return false
+  }
+
+  return true
+}
+
+const isStableHistoryLedger = (records: readonly EnergyInterval[]): boolean => {
+  if (!Array.isArray(records) || !Object.isFrozen(records)) return false
+
+  for (let index = 0; index < records.length; index += 1) {
+    if (!hasOwnDataProperty(records, index)) return false
+    const record = records[index]!
+    if (
+      Object.getPrototypeOf(record) !== Object.prototype ||
+      !Object.isFrozen(record) ||
+      !historyCacheFields.every((field) => hasOwnDataProperty(record, field)) ||
+      !isStableTransferList(record.transfers)
+    ) return false
+  }
+
+  return true
+}
+
+const createTotalPrefixArrays = (length: number): TotalPrefixArrays => ({
+  solarKwh: new Float64Array(length),
+  homeKwh: new Float64Array(length),
+  evKwh: new Float64Array(length),
+  energyConsumedKwh: new Float64Array(length),
+  batteryChargeKwh: new Float64Array(length),
+  batteryDischargeKwh: new Float64Array(length),
+  gridImportKwh: new Float64Array(length),
+  gridExportKwh: new Float64Array(length),
+  importCostUsd: new Float64Array(length),
+  exportCreditUsd: new Float64Array(length),
+  counterfactualCostUsd: new Float64Array(length),
+  savingsUsd: new Float64Array(length),
+  avoidedCo2Kg: new Float64Array(length),
+})
+
+const createChartPrefixArrays = (length: number): ChartPrefixArrays => ({
+  solarKw: new Float64Array(length),
+  homeKw: new Float64Array(length),
+  evKw: new Float64Array(length),
+  batteryNetKw: new Float64Array(length),
+  gridImportKw: new Float64Array(length),
+  gridExportKw: new Float64Array(length),
+})
+
+const buildHistoryPrefixCache = (
+  records: readonly EnergyInterval[],
+): HistoryPrefixCache => {
+  const totals = createTotalPrefixArrays(records.length + 1)
+  const chart = createChartPrefixArrays(records.length + 1)
+  const cache: HistoryPrefixCache = {
+    totals,
+    chart,
+    buildCount: 1,
+    sourceRecordReads: 0,
+    prefixValueReads: 0,
+  }
+
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]!
+    const next = index + 1
+    validateHistoryRecord(record, record.index)
+    const aggregateInputs = [
+      record.solarKwh,
+      record.homeKwh,
+      record.evKwh,
+      record.batteryChargeKwh,
+      record.batteryDischargeKwh,
+      record.gridImportKwh,
+      record.gridExportKwh,
+      record.importCost,
+      record.exportCredit,
+      record.counterfactualCost,
+      record.avoidedCo2Kg,
+    ]
+    if (
+      aggregateInputs.some((value) => !Number.isFinite(value) || value < 0) ||
+      !Number.isFinite(record.savings)
+    ) {
+      throw new Error(`Record ${record.index} contains invalid aggregate values`)
+    }
+
+    totals.solarKwh[next] = totals.solarKwh[index]! + record.solarKwh
+    totals.homeKwh[next] = totals.homeKwh[index]! + record.homeKwh
+    totals.evKwh[next] = totals.evKwh[index]! + record.evKwh
+    totals.energyConsumedKwh[next] =
+      totals.energyConsumedKwh[index]! + record.homeKwh + record.evKwh
+    totals.batteryChargeKwh[next] =
+      totals.batteryChargeKwh[index]! + record.batteryChargeKwh
+    totals.batteryDischargeKwh[next] =
+      totals.batteryDischargeKwh[index]! + record.batteryDischargeKwh
+    totals.gridImportKwh[next] = totals.gridImportKwh[index]! + record.gridImportKwh
+    totals.gridExportKwh[next] = totals.gridExportKwh[index]! + record.gridExportKwh
+    totals.importCostUsd[next] = totals.importCostUsd[index]! + record.importCost
+    totals.exportCreditUsd[next] = totals.exportCreditUsd[index]! + record.exportCredit
+    totals.counterfactualCostUsd[next] =
+      totals.counterfactualCostUsd[index]! + record.counterfactualCost
+    totals.savingsUsd[next] = totals.savingsUsd[index]! + record.savings
+    totals.avoidedCo2Kg[next] = totals.avoidedCo2Kg[index]! + record.avoidedCo2Kg
+
+    const totalValues = [
+      totals.solarKwh[next],
+      totals.homeKwh[next],
+      totals.evKwh[next],
+      totals.energyConsumedKwh[next],
+      totals.batteryChargeKwh[next],
+      totals.batteryDischargeKwh[next],
+      totals.gridImportKwh[next],
+      totals.gridExportKwh[next],
+      totals.importCostUsd[next],
+      totals.exportCreditUsd[next],
+      totals.counterfactualCostUsd[next],
+      totals.savingsUsd[next],
+      totals.avoidedCo2Kg[next],
+    ]
+    if (!totalValues.every(Number.isFinite)) {
+      throw new Error(`Record ${record.index} causes aggregate overflow`)
+    }
+
+    const batteryNetKw =
+      batteryTransferKw(record, 'outgoing') - batteryTransferKw(record, 'incoming')
+    chart.solarKw[next] = chart.solarKw[index]! + record.solarKw
+    chart.homeKw[next] = chart.homeKw[index]! + record.homeKw
+    chart.evKw[next] = chart.evKw[index]! + record.evKw
+    chart.batteryNetKw[next] = chart.batteryNetKw[index]! + batteryNetKw
+    chart.gridImportKw[next] = chart.gridImportKw[index]! + record.gridImportKw
+    chart.gridExportKw[next] = chart.gridExportKw[index]! + record.gridExportKw
+    if (![
+      chart.solarKw[next],
+      chart.homeKw[next],
+      chart.evKw[next],
+      chart.batteryNetKw[next],
+      chart.gridImportKw[next],
+      chart.gridExportKw[next],
+    ].every(Number.isFinite)) {
+      throw new Error(`Record ${record.index} causes history prefix overflow`)
+    }
+    cache.sourceRecordReads += 1
+  }
+
+  return cache
+}
+
+const getHistoryPrefixCache = (
+  records: readonly EnergyInterval[],
+): HistoryPrefixCache | null => {
+  const existing = historyPrefixCaches.get(records)
+  if (existing !== undefined) return existing
+  if (!isStableHistoryLedger(records)) return null
+
+  const cache = buildHistoryPrefixCache(records)
+  historyPrefixCaches.set(records, cache)
+  return cache
+}
+
+const prefixDifference = (
+  cache: HistoryPrefixCache,
+  prefix: Float64Array,
+  start: number,
+  end: number,
+): number => {
+  cache.prefixValueReads += 2
+  const value = prefix[end]! - prefix[start]!
+  if (!Number.isFinite(value)) throw new Error('History prefix range overflow')
+  return value
+}
+
+const totalsFromPrefixes = (
+  cache: HistoryPrefixCache,
+  start: number,
+  end: number,
+): EnergyTotals => ({
+  solarKwh: prefixDifference(cache, cache.totals.solarKwh, start, end),
+  homeKwh: prefixDifference(cache, cache.totals.homeKwh, start, end),
+  evKwh: prefixDifference(cache, cache.totals.evKwh, start, end),
+  energyConsumedKwh: prefixDifference(cache, cache.totals.energyConsumedKwh, start, end),
+  batteryChargeKwh: prefixDifference(cache, cache.totals.batteryChargeKwh, start, end),
+  batteryDischargeKwh: prefixDifference(cache, cache.totals.batteryDischargeKwh, start, end),
+  gridImportKwh: prefixDifference(cache, cache.totals.gridImportKwh, start, end),
+  gridExportKwh: prefixDifference(cache, cache.totals.gridExportKwh, start, end),
+  importCostUsd: prefixDifference(cache, cache.totals.importCostUsd, start, end),
+  exportCreditUsd: prefixDifference(cache, cache.totals.exportCreditUsd, start, end),
+  counterfactualCostUsd: prefixDifference(
+    cache,
+    cache.totals.counterfactualCostUsd,
+    start,
+    end,
+  ),
+  savingsUsd: prefixDifference(cache, cache.totals.savingsUsd, start, end),
+  avoidedCo2Kg: prefixDifference(cache, cache.totals.avoidedCo2Kg, start, end),
+})
+
+const buildHistorySeriesFromPrefixes = (
+  records: readonly EnergyInterval[],
+  start: number,
+  end: number,
+  cache: HistoryPrefixCache,
+): HistorySeriesPoint[] => {
+  const recordCount = end - start
+  const step = Math.ceil(recordCount / 2_048)
+  const series: HistorySeriesPoint[] = []
+
+  for (let bucketStart = start; bucketStart < end; bucketStart += step) {
+    const bucketEnd = Math.min(end, bucketStart + step)
+    const count = bucketEnd - bucketStart
+    const finalRecord = records[bucketEnd - 1]!
+    series.push({
+      index: finalRecord.index,
+      timestamp: finalRecord.iso,
+      solarKw: prefixDifference(cache, cache.chart.solarKw, bucketStart, bucketEnd) / count,
+      homeKw: prefixDifference(cache, cache.chart.homeKw, bucketStart, bucketEnd) / count,
+      evKw: prefixDifference(cache, cache.chart.evKw, bucketStart, bucketEnd) / count,
+      batteryNetKw:
+        prefixDifference(cache, cache.chart.batteryNetKw, bucketStart, bucketEnd) / count,
+      gridImportKw:
+        prefixDifference(cache, cache.chart.gridImportKw, bucketStart, bucketEnd) / count,
+      gridExportKw:
+        prefixDifference(cache, cache.chart.gridExportKw, bucketStart, bucketEnd) / count,
+    })
+  }
+
+  return series
+}
+
+/** @internal Test seam for verifying immutable-ledger prefix reuse. */
+export const __getHistoryPrefixCacheStats = (
+  records: readonly EnergyInterval[],
+) => {
+  const cache = historyPrefixCaches.get(records)
+  return cache === undefined
+    ? null
+    : {
+        buildCount: cache.buildCount,
+        sourceRecordReads: cache.sourceRecordReads,
+        prefixValueReads: cache.prefixValueReads,
+      }
+}
+
 const buildHistorySeries = (
   records: readonly EnergyInterval[],
 ): HistorySeriesPoint[] => {
@@ -390,6 +694,7 @@ export const getHistoryView = (
   const selectedRecords = records.slice(window.start, window.end + 1)
   const startRecord = selectedRecords[0]!
   const endRecord = selectedRecords[selectedRecords.length - 1]!
+  const prefixCache = getHistoryPrefixCache(records)
 
   return {
     records: selectedRecords,
@@ -405,7 +710,16 @@ export const getHistoryView = (
       canGoPrevious: window.previousAnchor !== null,
       canGoNext: window.nextAnchor !== null,
     },
-    totals: aggregateIntervals(selectedRecords),
-    series: buildHistorySeries(selectedRecords),
+    totals: prefixCache === null
+      ? aggregateIntervals(selectedRecords)
+      : totalsFromPrefixes(prefixCache, window.start, window.end + 1),
+    series: prefixCache === null
+      ? buildHistorySeries(selectedRecords)
+      : buildHistorySeriesFromPrefixes(
+          records,
+          window.start,
+          window.end + 1,
+          prefixCache,
+        ),
   }
 }
