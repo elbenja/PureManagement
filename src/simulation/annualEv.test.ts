@@ -1,11 +1,12 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { ClockSlot } from '../domain/energy'
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
-import { __assertAnnualEvMonthFeasible, generateAnnualEv } from './annualEv'
+import { __requiredEarlyChargeKwh, generateAnnualEv } from './annualEv'
 import type { EvPoint } from './ev'
 import { buildYearClock } from './yearClock'
 
 const intervalHours = LOS_ANGELES_2026.intervalMinutes / 60
+const maxChargePerSlotKwh = LOS_ANGELES_2026.ev.chargerKw * intervalHours
 const initialSocKwh = LOS_ANGELES_2026.ev.capacityKwh * LOS_ANGELES_2026.ev.initialSocPercent / 100
 const weekdayDepartureMinute = 7 * 60 + 30
 const preferredChargingMinute = 20 * 60
@@ -114,6 +115,34 @@ describe('generateAnnualEv', () => {
     expect(valid).toBe(true)
   })
 
+  it('keeps weekend trips unavailable through return and available at the return transition', () => {
+    const weekendDates = new Map<string, number[]>()
+    clock.forEach((slot, index) => {
+      if (![0, 6].includes(slot.dayOfWeek)) return
+      const indexes = weekendDates.get(dateKey(slot)) ?? []
+      indexes.push(index)
+      weekendDates.set(dateKey(slot), indexes)
+    })
+
+    let valid = true
+    for (const indexes of weekendDates.values()) {
+      const departurePosition = indexes.findIndex((index) => points[index]!.tripKwh > 0)
+      const returnPosition = indexes.findIndex((index, position) =>
+        position > departurePosition && points[index]!.available,
+      )
+      const departureMinute = clock[indexes[departurePosition]!]!.minuteOfDay
+      const returnMinute = clock[indexes[returnPosition]!]!.minuteOfDay
+
+      valid &&= departurePosition >= 0 && returnPosition > departurePosition
+      valid &&= indexes.slice(0, departurePosition).every((index) => points[index]!.available)
+      valid &&= indexes.slice(departurePosition, returnPosition).every((index) => !points[index]!.available)
+      valid &&= points[indexes[returnPosition]!]!.available
+      valid &&= [210, 240, 270, 300, 330].includes(returnMinute - departureMinute)
+    }
+
+    expect(valid).toBe(true)
+  })
+
   it('maintains a finite continuous physical ledger and finishes at the initial SOC', () => {
     expect(points[0]!.socStartKwh).toBe(initialSocKwh)
     let valid = true
@@ -158,37 +187,39 @@ describe('generateAnnualEv', () => {
     expect(points.at(-1)!.socEndKwh).toBe(initialSocKwh)
   })
 
-  it('charges in preferred hours unless earlier charging is physically necessary', () => {
-    let pendingKwh = 0
-    let earlyChargeCount = 0
-
-    points.forEach((point, index) => {
-      pendingKwh += point.tripKwh
+  it('keeps the approved annual schedule entirely in preferred charging hours', () => {
+    expect(points.every((point, index) => {
+      if (point.chargeKwh === 0) return true
       const minute = clock[index]!.minuteOfDay
-      const preferred = minute >= preferredChargingMinute || minute < weekdayDepartureMinute
+      return minute >= preferredChargingMinute || minute < weekdayDepartureMinute
+    })).toBe(true)
+  })
 
-      if (point.chargeKwh > 0 && !preferred) {
-        earlyChargeCount += 1
-        const nextDeparture = points.findIndex((candidate, candidateIndex) =>
-          candidateIndex > index && candidate.tripKwh > 0,
-        )
-        const end = nextDeparture < 0 ? points.length : nextDeparture
-        let preferredCapacityKwh = 0
-        for (let future = index; future < end; future += 1) {
-          const futureMinute = clock[future]!.minuteOfDay
-          if (
-            points[future]!.available &&
-            (futureMinute >= preferredChargingMinute || futureMinute < weekdayDepartureMinute)
-          ) {
-            preferredCapacityKwh += LOS_ANGELES_2026.ev.chargerKw * intervalHours
-          }
-        }
-        expect(pendingKwh).toBeGreaterThan(preferredCapacityKwh)
-      }
-      pendingKwh -= point.chargeKwh
-    })
-
-    expect(earlyChargeCount).toBe(0)
+  it('starts early charging exactly at the next-departure SOC deficit boundary', () => {
+    const constrainedState = {
+      socKwh: 10,
+      pendingChargeKwh: 20,
+      preferredCapacityKwh: 3,
+    }
+    const justAboveBoundaryKwh = 13 + Number.EPSILON * 8
+    expect(__requiredEarlyChargeKwh({ ...constrainedState, nextTripKwh: 13 })).toBe(0)
+    expect(__requiredEarlyChargeKwh({ ...constrainedState, nextTripKwh: justAboveBoundaryKwh })).toBe(
+      justAboveBoundaryKwh - 13,
+    )
+    expect(__requiredEarlyChargeKwh({ ...constrainedState, nextTripKwh: 13.25 })).toBe(0.25)
+    expect(__requiredEarlyChargeKwh({ ...constrainedState, nextTripKwh: 14 })).toBe(maxChargePerSlotKwh)
+    expect(__requiredEarlyChargeKwh({
+      socKwh: 74.5,
+      pendingChargeKwh: 1,
+      preferredCapacityKwh: 0,
+      nextTripKwh: 75,
+    })).toBe(0.5)
+    expect(() => __requiredEarlyChargeKwh({
+      socKwh: 10,
+      pendingChargeKwh: 2,
+      preferredCapacityKwh: 3,
+      nextTripKwh: 12.25,
+    })).toThrow('Annual EV next departure cannot be prepared')
   })
 
   it('rejects malformed clocks and seeds with clear indexed errors', () => {
@@ -229,12 +260,6 @@ describe('generateAnnualEv', () => {
     for (const seed of ['', '   ', null, 42]) {
       expect(() => generateAnnualEv(clock, seed as string)).toThrow('Invalid annual EV seed')
     }
-  })
-
-  it('rejects infeasible monthly travel targets through its narrow test seam', () => {
-    expect(() => __assertAnnualEvMonthFeasible(Array(31).fill(0), 340, 1)).toThrow(
-      'Annual EV travel target is infeasible for month 1',
-    )
   })
 
   it('does not mutate its clock input', () => {

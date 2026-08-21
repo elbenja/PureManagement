@@ -21,6 +21,19 @@ interface DayPlan extends RawDayPlan {
   tripKwh: number
 }
 
+interface ChargingMetadata {
+  nextDepartureIndex: Int32Array
+  nextTripKwh: Float64Array
+  preferredCapacityKwh: Float64Array
+}
+
+interface EarlyChargeInput {
+  socKwh: number
+  pendingChargeKwh: number
+  preferredCapacityKwh: number
+  nextTripKwh: number
+}
+
 const intervalHours = LOS_ANGELES_2026.intervalMinutes / 60
 const initialSocKwh = LOS_ANGELES_2026.ev.capacityKwh * LOS_ANGELES_2026.ev.initialSocPercent / 100
 const maxChargePerSlotKwh = LOS_ANGELES_2026.ev.chargerKw * intervalHours
@@ -166,13 +179,6 @@ const assertMonthFeasible = (
   }
 }
 
-/** @internal Narrow test seam for the otherwise scenario-fixed feasibility guard. */
-export const __assertAnnualEvMonthFeasible = (
-  dayOfWeeks: readonly number[],
-  targetKwh: number,
-  month: number,
-) => assertMonthFeasible(dayOfWeeks, targetKwh, month)
-
 const allocateMonthTripEnergy = (plans: RawDayPlan[], month: number): number[] => {
   const targetKwh = LOS_ANGELES_2026.ev.targetMonthlyKwh
   assertMonthFeasible(plans.map((plan) => plan.dayOfWeek), targetKwh, month)
@@ -251,24 +257,74 @@ const isAvailable = (slot: ClockSlot, plan: DayPlan) =>
 const isPreferredChargingSlot = (minuteOfDay: number) =>
   minuteOfDay >= preferredChargingMinute || minuteOfDay < weekdayDepartureMinute
 
-const preferredCapacityBeforeNextDeparture = (
+const buildChargingMetadata = (
   clock: ClockSlot[],
   planByIndex: readonly DayPlan[],
-  departureIndexes: ReadonlySet<number>,
-  fromIndex: number,
-) => {
-  let capacityKwh = 0
-  for (let index = fromIndex; index < clock.length; index += 1) {
-    if (index > fromIndex && departureIndexes.has(index)) break
+): ChargingMetadata => {
+  const nextDepartureIndex = new Int32Array(clock.length)
+  nextDepartureIndex.fill(-1)
+  const nextTripKwh = new Float64Array(clock.length)
+  const preferredCapacityKwh = new Float64Array(clock.length)
+  let nextIndex = -1
+  let nextTrip = 0
+  let preferredCapacity = 0
+
+  for (let index = clock.length - 1; index >= 0; index -= 1) {
+    const plan = planByIndex[index]!
+    if (index === plan.departureIndex) {
+      nextDepartureIndex[index] = nextIndex
+      nextTripKwh[index] = nextTrip
+      preferredCapacityKwh[index] = preferredCapacity
+      nextIndex = index
+      nextTrip = plan.tripKwh
+      preferredCapacity = 0
+      continue
+    }
+
     const slot = clock[index]!
     if (
-      isAvailable(slot, planByIndex[index]!) &&
+      isAvailable(slot, plan) &&
       isPreferredChargingSlot(slot.minuteOfDay)
     ) {
-      capacityKwh += maxChargePerSlotKwh
+      preferredCapacity += maxChargePerSlotKwh
     }
+    nextDepartureIndex[index] = nextIndex
+    nextTripKwh[index] = nextTrip
+    preferredCapacityKwh[index] = preferredCapacity
   }
-  return capacityKwh
+
+  return { nextDepartureIndex, nextTripKwh, preferredCapacityKwh }
+}
+
+/** @internal Pure test seam for the early-charge scheduling boundary. */
+export const __requiredEarlyChargeKwh = ({
+  socKwh,
+  pendingChargeKwh,
+  preferredCapacityKwh,
+  nextTripKwh,
+}: EarlyChargeInput): number => {
+  const batteryHeadroomKwh = Math.max(0, LOS_ANGELES_2026.ev.capacityKwh - socKwh)
+  const usablePreferredKwh = Math.min(
+    pendingChargeKwh,
+    preferredCapacityKwh,
+    batteryHeadroomKwh,
+  )
+  const departureDeficitKwh = nextTripKwh - (socKwh + usablePreferredKwh)
+  if (departureDeficitKwh <= 0) return 0
+  const maximumPreparedSocKwh = Math.min(
+    LOS_ANGELES_2026.ev.capacityKwh,
+    socKwh + pendingChargeKwh,
+  )
+  if (maximumPreparedSocKwh < nextTripKwh) {
+    throw new Error('Annual EV next departure cannot be prepared')
+  }
+
+  return Math.min(
+    departureDeficitKwh,
+    maxChargePerSlotKwh,
+    pendingChargeKwh,
+    batteryHeadroomKwh,
+  )
 }
 
 const sumEnergy = (points: readonly EvPoint[], field: 'chargeKwh' | 'tripKwh', end = points.length) => {
@@ -326,6 +382,7 @@ const validatePoints = (
   clock: ClockSlot[],
   points: EvPoint[],
   planByIndex: readonly DayPlan[],
+  chargingMetadata: ChargingMetadata,
 ) => {
   if (points.length !== clock.length) throw new Error('Annual EV output length mismatch')
 
@@ -376,16 +433,17 @@ const validatePoints = (
     }
 
     pendingKwh += point.tripKwh
-    if (point.chargeKwh > 0 && !isPreferredChargingSlot(slot.minuteOfDay)) {
-      const departureIndexes = new Set(planByIndex.map((dayPlan) => dayPlan.departureIndex))
-      const preferredCapacity = preferredCapacityBeforeNextDeparture(
-        clock,
-        planByIndex,
-        departureIndexes,
-        index,
-      )
-      if (pendingKwh <= preferredCapacity + toleranceKwh) {
-        outputError(index, 'charged early without physical necessity')
+    if (point.available && !isPreferredChargingSlot(slot.minuteOfDay)) {
+      const requiredEarlyChargeKwh = __requiredEarlyChargeKwh({
+        socKwh: point.socStartKwh - point.tripKwh,
+        pendingChargeKwh: pendingKwh,
+        preferredCapacityKwh: chargingMetadata.preferredCapacityKwh[index]!,
+        nextTripKwh: chargingMetadata.nextDepartureIndex[index]! >= 0
+          ? chargingMetadata.nextTripKwh[index]!
+          : 0,
+      })
+      if (Math.abs(point.chargeKwh - requiredEarlyChargeKwh) > toleranceKwh) {
+        outputError(index, 'early charge does not match the next-departure deficit')
       }
     }
     pendingKwh -= point.chargeKwh
@@ -430,7 +488,7 @@ export const generateAnnualEv = (clock: ClockSlot[], seedId: string): EvPoint[] 
   const dayPlans = buildDayPlans(clock, seedId)
   const planByIndex = new Array<DayPlan>(clock.length)
   dayPlans.forEach((plan) => plan.indexes.forEach((index) => { planByIndex[index] = plan }))
-  const departureIndexes = new Set(dayPlans.map((plan) => plan.departureIndex))
+  const chargingMetadata = buildChargingMetadata(clock, planByIndex)
 
   let socKwh = initialSocKwh
   let pendingChargeKwh = 0
@@ -449,18 +507,21 @@ export const generateAnnualEv = (clock: ClockSlot[], seedId: string): EvPoint[] 
     let chargeKwh = 0
     if (available && pendingChargeKwh > 0) {
       const preferred = isPreferredChargingSlot(slot.minuteOfDay)
-      const preferredCapacity = preferred ? 0 : preferredCapacityBeforeNextDeparture(
-        clock,
-        planByIndex,
-        departureIndexes,
-        index,
-      )
-      if (preferred || pendingChargeKwh > preferredCapacity + toleranceKwh) {
+      if (preferred) {
         chargeKwh = Math.min(
           maxChargePerSlotKwh,
           pendingChargeKwh,
           LOS_ANGELES_2026.ev.capacityKwh - socKwh,
         )
+      } else {
+        chargeKwh = __requiredEarlyChargeKwh({
+          socKwh,
+          pendingChargeKwh,
+          preferredCapacityKwh: chargingMetadata.preferredCapacityKwh[index]!,
+          nextTripKwh: chargingMetadata.nextDepartureIndex[index]! >= 0
+            ? chargingMetadata.nextTripKwh[index]!
+            : 0,
+        })
       }
     }
 
@@ -482,6 +543,6 @@ export const generateAnnualEv = (clock: ClockSlot[], seedId: string): EvPoint[] 
 
   reconcileFinalCharge(points)
   rebuildSocLedger(points)
-  validatePoints(clock, points, planByIndex)
+  validatePoints(clock, points, planByIndex, chargingMetadata)
   return points
 }
