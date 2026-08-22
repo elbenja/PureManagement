@@ -1,21 +1,27 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import * as api from './index'
 import {
+  LOS_ANGELES_2026,
   LOS_ANGELES_AUGUST_2026,
   accountInterval,
   advancePosition,
   aggregateIntervals,
   buildPrefixTotals,
   generateMonth,
+  generateYear,
+  getDailyOutlook,
   getHistoryView,
   getLiveFrame,
+  getRangeWindow,
   getTrailingWindow,
   interpolatePower,
   validateMonth,
+  validateYear,
   type AccountingInput,
   type AccountingResult,
   type ClockSlot,
   type DayType,
+  type DailyOutlook,
   type EnergyInterval,
   type EnergyNode,
   type EnergyNodeView,
@@ -29,6 +35,7 @@ import {
   type TimeRange,
   type TouPeriod,
   type Transfer,
+  type WeatherState,
 } from './index'
 
 const expectDeepFrozen = (value: unknown): void => {
@@ -47,6 +54,19 @@ describe('public simulation API', () => {
     expect(getLiveFrame(records, 0)?.index).toBe(0)
     expect(getHistoryView(records, '24h', 287)?.records).toHaveLength(288)
   })
+
+  it('exports the annual scenario, ledger, validation, ranges, and simulated outlook', () => {
+    const records = generateYear()
+
+    expect(LOS_ANGELES_2026.id).toBe('woodland-hills-2026-v1')
+    expect(records).toHaveLength(105_120)
+    expect(validateYear(records)).toEqual([])
+    expect(getRangeWindow(records, '30d', 8_639)).toMatchObject({
+      start: 0,
+      end: 8_639,
+    })
+    expect(getDailyOutlook(records, 0)).toHaveLength(7)
+  }, 30_000)
 
   it('exports framework-neutral accounting, aggregation, and playback helpers', () => {
     const records = generateMonth().slice(0, 2)
@@ -98,7 +118,9 @@ describe('public simulation API', () => {
     expectTypeOf<Transfer>().toBeObject()
     expectTypeOf<EnergyInterval>().toBeObject()
     expectTypeOf<EnergyTotals>().toBeObject()
-    expectTypeOf<TimeRange>().toEqualTypeOf<'24h' | '7d' | '31d'>()
+    expectTypeOf<WeatherState>().toEqualTypeOf<'clear' | 'partly-cloudy' | 'overcast' | 'rain'>()
+    expectTypeOf<TimeRange>().toEqualTypeOf<'24h' | '7d' | '30d' | '31d' | 'month' | 'ytd'>()
+    expectTypeOf<DailyOutlook>().toBeObject()
     expectTypeOf<AccountingInput>().toBeObject()
     expectTypeOf<AccountingResult>().toBeObject()
     expectTypeOf<EnergyNodeView>().toBeObject()

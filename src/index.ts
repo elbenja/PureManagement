@@ -12,11 +12,15 @@ export type {
   LoadCategory,
   TouPeriod,
   Transfer,
+  WeatherState,
 } from './domain/energy'
 
+export { LOS_ANGELES_2026 } from './scenario/losAngeles2026'
 export { LOS_ANGELES_AUGUST_2026 } from './scenario/losAngelesAugust2026'
 export { generateMonth } from './simulation/generateMonth'
+export { generateYear } from './simulation/generateYear'
 export { validateMonth } from './simulation/validate'
+export { validateYear } from './simulation/validateYear'
 
 export { accountInterval } from './simulation/accounting'
 export type {
@@ -27,6 +31,7 @@ export type {
 export {
   aggregateIntervals,
   buildPrefixTotals,
+  getRangeWindow,
   getTrailingWindow,
 } from './simulation/aggregate'
 export type { EnergyTotals, TimeRange } from './simulation/aggregate'
@@ -34,6 +39,8 @@ export type { EnergyTotals, TimeRange } from './simulation/aggregate'
 export { advancePosition, interpolatePower } from './playback/playback'
 
 export { getHistoryView, getLiveFrame } from './consumer/views'
+export { getDailyOutlook } from './consumer/outlook'
+export type { DailyOutlook } from './consumer/outlook'
 export type {
   BatteryNodeView,
   EnergyNodeView,
