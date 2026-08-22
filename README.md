@@ -188,7 +188,7 @@ Energy, money, and carbon totals use every original record in the selected windo
 
 ### Simulated daily outlook
 
-`getDailyOutlook(records, anchorIndex)` and `simulation.outlook` derive up to seven available local days from future records in the annual ledger. Each day includes the local date, dominant weather state, minimum and maximum temperature, simulated precipitation, and expected solar energy. The selector stops at December 31 and never wraps into a new year.
+`getDailyOutlook(records, anchorIndex)` and `simulation.outlook` derive the anchor's local date plus following available dates, up to seven local days total, from the annual ledger. Each day includes the local date, dominant weather state, minimum and maximum temperature, simulated precipitation, and expected solar energy. The selector stops at December 31 and never wraps into a new year.
 
 This outlook is part of the deterministic simulated scenario. It is not a live weather forecast and must be labeled as simulated wherever it is displayed.
 
