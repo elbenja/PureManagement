@@ -14,6 +14,10 @@ export type {
   Transfer,
   WeatherState,
 } from './domain/energy'
+export { isAnnualEnergyInterval } from './domain/annualEnergy'
+export type { AnnualEnergyInterval } from './domain/annualEnergy'
+export { ANNUAL_OUTAGES, gridStatusAt } from './simulation/annualOutages'
+export type { AnnualOutage, GridStatus } from './simulation/annualOutages'
 
 export { LOS_ANGELES_2026 } from './scenario/losAngeles2026'
 export { LOS_ANGELES_AUGUST_2026 } from './scenario/losAngelesAugust2026'
