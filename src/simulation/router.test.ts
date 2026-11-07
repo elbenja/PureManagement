@@ -399,7 +399,7 @@ describe('routeInterval', () => {
     ['evKwh', { evKwh: -0.01 }],
     ['evKwh', { evKwh: Number.MAX_VALUE }],
     ['batterySocKwh', { batterySocKwh: Number.NaN }],
-    ['batterySocKwh', { batterySocKwh: reserveKwh - 0.01 }],
+    ['batterySocKwh', { batterySocKwh: -0.01 }],
     ['batterySocKwh', { batterySocKwh: scenario.battery.capacityKwh + 0.01 }],
     ['minuteOfDay', { minuteOfDay: Number.NaN }],
     ['minuteOfDay', { minuteOfDay: 12 * 60 + 1 }],

@@ -165,7 +165,7 @@ const addTransfer = (
 const validateInput = (
   input: RouterInput,
   scenario: RouterScenario,
-  { intervalHours, reserveKwh }: RouterConstants,
+  { intervalHours }: RouterConstants,
 ) => {
   const energyFields: Array<keyof Pick<RouterInput, 'solarKwh' | 'homeKwh' | 'evKwh'>> = [
     'solarKwh',
@@ -189,7 +189,7 @@ const validateInput = (
 
   if (
     !Number.isFinite(input.batterySocKwh) ||
-    input.batterySocKwh < reserveKwh ||
+    input.batterySocKwh < 0 ||
     input.batterySocKwh > scenario.battery.capacityKwh
   ) {
     throw new Error('Invalid batterySocKwh')
@@ -213,7 +213,7 @@ const verifyResult = (
   input: RouterInput,
   result: RouterResult,
   scenario: RouterScenario,
-  { intervalHours, reserveKwh }: RouterConstants,
+  { intervalHours }: RouterConstants,
 ) => {
   const numericValues = [
     result.batteryChargeKw,
@@ -233,7 +233,7 @@ const verifyResult = (
     throw new Error('Router invariant failed: non-negative finite result required')
   }
   if (
-    result.batterySocEndKwh < reserveKwh - invariantTolerance ||
+    result.batterySocEndKwh < -invariantTolerance ||
     result.batterySocEndKwh > scenario.battery.capacityKwh + invariantTolerance
   ) {
     throw new Error('Router invariant failed: battery state out of bounds')
@@ -350,7 +350,7 @@ export const routeInterval = (
   const demandKwh = remainingHomeKwh + remainingEvKwh
   const inDispatchWindow =
     input.minuteOfDay >= dispatchStartMinute && input.minuteOfDay < dispatchEndMinute
-  const availableBatteryDischargeKwh = (input.batterySocKwh - reserveKwh) * batteryEfficiency
+  const availableBatteryDischargeKwh = Math.max(0, input.batterySocKwh - reserveKwh) * batteryEfficiency
   const batteryDeliveredKwh = nonNegative(
     inDispatchWindow
       ? Math.min(demandKwh, maxAcKwhPerInterval, availableBatteryDischargeKwh)
