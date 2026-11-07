@@ -4,15 +4,15 @@
 
 **Project:** PureManagement, a local homeowner energy simulation
 
-**Current implementation branch:** `codex/simulated-outage-billing` (simulation code through `1e9336a`)
+**Current implementation branch:** `main` (annual simulation and modeled outage/billing data)
 
-**Working directory:** `/Users/benjaminsaravia/Projects/Silverdesk-lab/PureManagement/.worktrees/simulated-outage-billing`
+**Working directory:** `/Users/benjaminsaravia/Projects/Silverdesk-lab/PureManagement`
 
 ## Where the project stands
 
 The running application is a **plain simulation inspector**, not the planned visual homeowner dashboard. It generates and plays a deterministic, fully synthetic 2026 story for a Woodland Hills home. The user wants to design reusable visual components that can appear in several places, then build them. Prior research recommended starting with **Now & Flow**, **Cost & Credit**, and **Battery Readiness**, followed by Usage Drivers and History.
 
-The annual simulation originated on `codex/annual-energy-flow`. The current branch adds simulated outages, bill-credit accounting, and backup-hours estimates on top of it. **Neither annual branch is merged into `main`.** `main` still contains the earlier August simulation. The user has not chosen whether to merge or publish the current branch. Do not assume that opening the repository root shows the current annual app.
+The annual simulation originated on `codex/annual-energy-flow`; `codex/simulated-outage-billing` added simulated outages, bill-credit accounting, and backup-hours estimates. Both sets of work are now in `main`. The earlier August generator remains available for compatibility. The feature worktrees may still exist locally, but use the repository root for the current app.
 
 The earlier research report and visual PDF are in the repository root working folder, currently untracked:
 
@@ -63,24 +63,24 @@ For a component, import `generateYear`, `getLiveFrame`, `getHistoryView`, `getDa
 
 ## Run and verify
 
-From the **current implementation worktree** above:
+From the **repository root** above:
 
 ```bash
 npm install --no-package-lock --no-audit --no-fund
 npm run dev -- --host 127.0.0.1
 ```
 
-Open the local address printed by Vite (usually `http://127.0.0.1:5173/`). A server started in an earlier chat may have stopped; start a new one if the page does not load. The repository has no `package-lock.json`, so `npm ci` is not the setup command. `README.md` also documents a Bun workflow.
+Open the local address printed by Vite (usually `http://127.0.0.1:5173/`). A server started in an earlier chat may have stopped; start a new one if the page does not load. The repository has no `package-lock.json`, so `npm ci` is not the setup command. `README.md` also documents a Bun workflow. Vitest excludes the nested `.worktrees/` folder so the root check runs only the current source tree.
 
 ```bash
 npm run check
 ```
 
-The last full gate in this worktree passed **392 tests in 30 files**, TypeScript, and the Vite production build on November 7, 2026. Rerun it after code changes. The current feature worktree was clean before this handoff document was added.
+The full gate on `main` passed **392 tests in 30 files**, TypeScript, and the Vite production build on November 7, 2026. Rerun it after code changes.
 
 ## Boundaries for the next session
 
 - Keep all homeowner copy explicit that these values are **simulated** or **modeled**. There is no live outage detection, utility bill balance, device diagnosis, or validated backup promise.
 - Use actual solar (`solarKwh`) for displayed generation; use potential solar only when discussing the modeled production target or curtailment. Distinguish home demand from served home energy when an outage can leave load unmet.
 - Do not turn export credits into “earnings” or treat the modeled monthly amount due as an actual LADWP bill.
-- The earlier research points to reusable components. The current inspector is a data foundation, not the intended visual direction. Decide component design and branch integration with the user before replacing it or merging the annual work into `main`.
+- The earlier research points to reusable components. The current inspector is a data foundation, not the intended visual direction. Decide component design with the user before replacing it.
