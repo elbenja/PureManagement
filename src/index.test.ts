@@ -7,6 +7,7 @@ import {
   advancePosition,
   aggregateIntervals,
   buildPrefixTotals,
+  buildMonthlyStatements,
   generateMonth,
   generateYear,
   getDailyOutlook,
@@ -66,6 +67,7 @@ describe('public simulation API', () => {
       end: 8_639,
     })
     expect(getDailyOutlook(records, 0)).toHaveLength(7)
+    expect(buildMonthlyStatements(records)).toHaveLength(12)
   }, 30_000)
 
   it('exports framework-neutral accounting, aggregation, and playback helpers', () => {

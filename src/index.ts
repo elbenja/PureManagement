@@ -25,6 +25,8 @@ export { generateMonth } from './simulation/generateMonth'
 export { generateYear } from './simulation/generateYear'
 export { validateMonth } from './simulation/validate'
 export { validateYear } from './simulation/validateYear'
+export { buildMonthlyStatements } from './simulation/monthlyStatements'
+export type { MonthlyStatement } from './simulation/monthlyStatements'
 
 export { accountInterval } from './simulation/accounting'
 export type {

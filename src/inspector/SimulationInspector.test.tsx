@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EnergyInterval } from '../domain/energy'
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { generateMonth } from '../simulation/generateMonth'
+import { generateYear } from '../simulation/generateYear'
 import { SimulationInspector } from './SimulationInspector'
 
 const augustRecords = generateMonth()
@@ -42,6 +43,30 @@ afterEach(() => {
 })
 
 describe('SimulationInspector', () => {
+  it('labels annual outage, backup, and bill values as simulated', () => {
+    const annual = generateYear()
+    render(<SimulationInspector records={annual} scenario={LOS_ANGELES_2026} />)
+
+    expect(screen.getByText('Grid status (simulated)')).toBeVisible()
+    expect(screen.getByText('Battery-only backup estimate (modeled)')).toBeVisible()
+    expect(screen.getByText('Amount due (modeled)')).toBeVisible()
+    expect(screen.getByText(/No solar or EV charging is assumed for the backup estimate/)).toBeVisible()
+    expect(screen.getByText(/Taxes, minimum charges, adjustment factors, and real balances are excluded/)).toBeVisible()
+
+    const outageIndex = annual.findIndex((record) => record.gridStatus === 'outage')
+    fireEvent.change(screen.getByLabelText('Simulation interval'), {
+      target: { value: String(outageIndex) },
+    })
+    expect(screen.getByText('outage')).toBeVisible()
+    expect(screen.getByText('Unserved home demand')).toBeVisible()
+  }, 30_000)
+
+  it('keeps annual-only context out of the August inspector', () => {
+    render(<SimulationInspector records={augustRecords} />)
+    expect(screen.queryByText('Grid status (simulated)')).not.toBeInTheDocument()
+    expect(screen.queryByText('Amount due (modeled)')).not.toBeInTheDocument()
+  })
+
   it('inspects the public data contract and historical windows', () => {
     renderInspector()
 

@@ -29,6 +29,7 @@ describe('outages in the annual ledger', () => {
       record.importCost === 0 && record.exportCredit === 0 &&
       record.counterfactualCost === 0 && record.savings === 0,
     )).toBe(true)
+    expect(outages.some((record) => record.curtailedSolarKwh > 0)).toBe(true)
   })
 
   it('balances actual solar, served home energy, losses, and continuous storage', () => {

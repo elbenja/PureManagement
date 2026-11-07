@@ -1,8 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import type { EnergyInterval } from '../domain/energy'
+import { isAnnualEnergyInterval, type AnnualEnergyInterval } from '../domain/annualEnergy'
+import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 import { useEnergySimulation } from '../consumer/useEnergySimulation'
 import type { TimeRange } from '../simulation/aggregate'
+import { buildMonthlyStatements } from '../simulation/monthlyStatements'
 
 export interface SimulationInspectorProps {
   records: readonly EnergyInterval[]
@@ -39,6 +42,18 @@ export const SimulationInspector = ({
   }, [datasetKey, records.length, simulation.pause, simulation.scrubTo])
 
   const { live, history } = simulation
+  const annualRecords = records.length === LOS_ANGELES_2026.records &&
+    records[0] !== undefined && isAnnualEnergyInterval(records[0])
+    ? records as readonly AnnualEnergyInterval[]
+    : null
+  const statements = useMemo(
+    () => annualRecords === null ? null : buildMonthlyStatements(annualRecords),
+    [annualRecords],
+  )
+  const annualRecord = live === null || annualRecords === null
+    ? null
+    : annualRecords[live.index - annualRecords[0]!.index] ?? null
+  const statement = annualRecord === null ? null : statements?.[annualRecord.month - 1] ?? null
 
   if (live === null || history === null) {
     return (
@@ -130,6 +145,35 @@ export const SimulationInspector = ({
           <output>{live.index + 1} / {records.length}</output>
         </label>
       </section>
+
+      {annualRecord !== null && statement !== null && (
+        <section aria-labelledby="simulated-context-heading">
+          <h2 id="simulated-context-heading">Simulated home context</h2>
+          <dl className="inspection-fields">
+            <div><dt>Grid status (simulated)</dt><dd>{annualRecord.gridStatus}</dd></div>
+            <div>
+              <dt>Battery-only backup estimate (modeled)</dt>
+              <dd>{annualRecord.backupPowerLimited
+                ? '0 hours — home demand exceeds the 5 kW battery limit'
+                : `${number(annualRecord.backupHoursEstimate, 1)} hours`}</dd>
+            </div>
+            <div><dt>Solar curtailed</dt><dd>{number(annualRecord.curtailedSolarKwh)} kWh</dd></div>
+            <div><dt>Unserved home demand</dt><dd>{number(annualRecord.unservedHomeKwh)} kWh</dd></div>
+          </dl>
+          <p>No solar or EV charging is assumed for the backup estimate; it uses the previous hour of home demand.</p>
+          <h3>Modeled calendar-month statement</h3>
+          <dl className="inspection-fields">
+            <div><dt>Opening credit bank</dt><dd>${number(statement.openingCreditBankUsd, 2)}</dd></div>
+            <div><dt>Grid import cost</dt><dd>${number(statement.importCostUsd, 2)}</dd></div>
+            <div><dt>Export credit earned</dt><dd>${number(statement.earnedCreditUsd, 2)}</dd></div>
+            <div><dt>Credit applied</dt><dd>${number(statement.appliedCreditUsd, 2)}</dd></div>
+            <div><dt>Closing credit bank</dt><dd>${number(statement.closingCreditBankUsd, 2)}</dd></div>
+            <div><dt>Service charge</dt><dd>${number(statement.serviceChargeUsd, 2)}</dd></div>
+            <div><dt>Amount due (modeled)</dt><dd>${number(statement.amountDueUsd, 2)}</dd></div>
+          </dl>
+          <p>Taxes, minimum charges, adjustment factors, and real balances are excluded from this simulated statement.</p>
+        </section>
+      )}
 
       <section aria-labelledby="history-heading">
         <h2 id="history-heading">History</h2>
