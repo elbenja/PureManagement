@@ -1,6 +1,6 @@
 # Woodland Hills simulated outage and billing data — design specification
 
-**Date:** 2026-11-07  
+**Date:** 2026-11-07
 **Status:** Approved and implemented
 
 ## Purpose and scope
