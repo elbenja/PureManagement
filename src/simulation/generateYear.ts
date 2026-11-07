@@ -1,17 +1,20 @@
 import type { EnergyInterval } from '../domain/energy'
+import type { AnnualEnergyInterval } from '../domain/annualEnergy'
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
-import { accountInterval } from './accounting'
+import { accountAnnualInterval } from './annualAccounting'
 import { buildAnnualConditions } from './annualConditions'
 import { generateAnnualEv } from './annualEv'
 import { generateAnnualSolar } from './annualSolar'
 import { generateHomeLoad } from './home'
-import { routeInterval } from './router'
+import { gridStatusAt } from './annualOutages'
+import { routeAnnualInterval } from './annualRouter'
+import { estimateBackup } from './backupEstimate'
 import { validateYear } from './validateYear'
 import { buildYearClock } from './yearClock'
 
 const scenario = LOS_ANGELES_2026
 
-const freezeYear = (records: EnergyInterval[]): readonly EnergyInterval[] => {
+const freezeYear = <T extends EnergyInterval>(records: T[]): readonly T[] => {
   records.forEach((record) => {
     Object.freeze(record.homeBreakdownKwh)
     record.transfers.forEach(Object.freeze)
@@ -24,16 +27,16 @@ const freezeYear = (records: EnergyInterval[]): readonly EnergyInterval[] => {
 type AnnualValidator = (records: readonly EnergyInterval[]) => string[]
 
 /** @internal Test seam for atomic final validation. */
-export const __finalizeAnnualLedger = (
-  records: EnergyInterval[],
+export const __finalizeAnnualLedger = <T extends EnergyInterval>(
+  records: T[],
   validator: AnnualValidator = validateYear,
-): readonly EnergyInterval[] => {
+): readonly T[] => {
   const errors = validator(records)
   if (errors.length > 0) throw new Error(`Invalid annual simulation: ${errors.join('; ')}`)
   return freezeYear(records)
 }
 
-export const generateYear = (): readonly EnergyInterval[] => {
+export const generateYear = (): readonly AnnualEnergyInterval[] => {
   const clock = buildYearClock()
   const conditions = buildAnnualConditions(clock, scenario.seedId)
   const solar = generateAnnualSolar(clock, conditions)
@@ -44,8 +47,10 @@ export const generateYear = (): readonly EnergyInterval[] => {
     includeHeating: true,
   })
   const ev = generateAnnualEv(clock, scenario.seedId)
-  const records: EnergyInterval[] = []
+  const records: AnnualEnergyInterval[] = []
   let batterySocKwh = scenario.battery.capacityKwh * scenario.battery.initialPercent / 100
+  let trailingHomeKwh = 0
+  const intervalHours = scenario.intervalMinutes / 60
 
   for (let index = 0; index < clock.length; index += 1) {
     const slot = clock[index]!
@@ -53,20 +58,24 @@ export const generateYear = (): readonly EnergyInterval[] => {
     const solarPoint = solar[index]!
     const homePoint = home[index]!
     const evPoint = ev[index]!
-    const routed = routeInterval({
+    const gridStatus = gridStatusAt(slot.iso)
+    const routed = routeAnnualInterval({
       solarKwh: solarPoint.kwh,
       homeKwh: homePoint.kwh,
       evKwh: evPoint.chargeKwh,
       batterySocKwh,
       minuteOfDay: slot.minuteOfDay,
-    }, scenario)
-    const accounting = accountInterval({
+    }, gridStatus)
+    const accounting = accountAnnualInterval({
       tou: slot.tou,
       homeKwh: homePoint.kwh,
       evKwh: evPoint.chargeKwh,
       gridImportKwh: routed.gridImportKwh,
       gridExportKwh: routed.gridExportKwh,
-    }, scenario)
+    }, gridStatus)
+    trailingHomeKwh += homePoint.kwh
+    if (index >= 12) trailingHomeKwh -= records[index - 12]!.homeKwh
+    const backup = estimateBackup(routed.batterySocEndKwh, trailingHomeKwh, Math.min(index + 1, 12))
 
     records.push({
       ...slot,
@@ -75,8 +84,12 @@ export const generateYear = (): readonly EnergyInterval[] => {
       cloudFactor: condition.cloudFactor,
       weatherState: condition.weatherState,
       precipitationInches: condition.precipitationInches,
-      solarKw: solarPoint.kw,
-      solarKwh: solarPoint.kwh,
+      gridStatus,
+      solarKw: routed.actualSolarKwh / intervalHours,
+      solarKwh: routed.actualSolarKwh,
+      solarPotentialKwh: solarPoint.kwh,
+      curtailedSolarKwh: routed.curtailedSolarKwh,
+      unservedHomeKwh: routed.unservedHomeKwh,
       homeKw: homePoint.kw,
       homeKwh: homePoint.kwh,
       homeBreakdownKwh: { ...homePoint.breakdownKwh },
@@ -99,6 +112,8 @@ export const generateYear = (): readonly EnergyInterval[] => {
       gridExportKw: routed.gridExportKw,
       gridExportKwh: routed.gridExportKwh,
       transfers: routed.transfers.map((transfer) => ({ ...transfer })),
+      backupHoursEstimate: backup.hours,
+      backupPowerLimited: backup.powerLimited,
       ...accounting,
     })
     batterySocKwh = routed.batterySocEndKwh

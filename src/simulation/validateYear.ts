@@ -6,10 +6,14 @@ import type {
   Transfer,
   WeatherState,
 } from '../domain/energy'
+import type { AnnualEnergyInterval } from '../domain/annualEnergy'
 import { LOS_ANGELES_2026 } from '../scenario/losAngeles2026'
-import { accountInterval } from './accounting'
+import { accountAnnualInterval } from './annualAccounting'
 import { aggregateIntervals, type EnergyTotals } from './aggregate'
-import { routeInterval, type RouterResult } from './router'
+import { gridStatusAt } from './annualOutages'
+import { routeAnnualInterval } from './annualRouter'
+import { estimateBackup } from './backupEstimate'
+import type { RouterResult } from './router'
 import { buildYearClock } from './yearClock'
 
 const scenario = LOS_ANGELES_2026
@@ -29,30 +33,32 @@ const clockFields: readonly (keyof ClockSlot)[] = [
   'utcOffset', 'tou',
 ]
 
-const recordFields: readonly (keyof EnergyInterval)[] = [
+const recordFields: readonly (keyof AnnualEnergyInterval)[] = [
   ...clockFields,
   'dayType', 'temperatureF', 'cloudFactor', 'weatherState', 'precipitationInches',
-  'solarKw', 'solarKwh', 'homeKw', 'homeKwh', 'homeBreakdownKwh', 'evKw', 'evKwh',
+  'gridStatus', 'solarKw', 'solarKwh', 'solarPotentialKwh', 'curtailedSolarKwh',
+  'unservedHomeKwh', 'homeKw', 'homeKwh', 'homeBreakdownKwh', 'evKw', 'evKwh',
   'evAvailable', 'vehicleSocStartKwh', 'vehicleSocEndKwh', 'tripKwh',
   'batteryChargeKw', 'batteryChargeKwh', 'batteryDischargeKw', 'batteryDischargeKwh',
   'batterySocStartKwh', 'batterySocEndKwh', 'chargeLossKwh', 'dischargeLossKwh',
   'gridImportKw', 'gridImportKwh', 'gridExportKw', 'gridExportKwh', 'transfers',
   'importRate', 'exportRate', 'importCost', 'exportCredit', 'counterfactualCost',
-  'savings', 'avoidedCo2Kg',
+  'savings', 'avoidedCo2Kg', 'backupHoursEstimate', 'backupPowerLimited',
 ]
 
-const numericFields: readonly (keyof EnergyInterval)[] = [
+const numericFields: readonly (keyof AnnualEnergyInterval)[] = [
   'index', 'year', 'month', 'day', 'dayOfYear', 'dayOfWeek', 'minuteOfDay',
   'temperatureF', 'cloudFactor', 'precipitationInches', 'solarKw', 'solarKwh',
+  'solarPotentialKwh', 'curtailedSolarKwh', 'unservedHomeKwh',
   'homeKw', 'homeKwh', 'evKw', 'evKwh', 'vehicleSocStartKwh', 'vehicleSocEndKwh',
   'tripKwh', 'batteryChargeKw', 'batteryChargeKwh', 'batteryDischargeKw',
   'batteryDischargeKwh', 'batterySocStartKwh', 'batterySocEndKwh', 'chargeLossKwh',
   'dischargeLossKwh', 'gridImportKw', 'gridImportKwh', 'gridExportKw', 'gridExportKwh',
   'importRate', 'exportRate', 'importCost', 'exportCredit', 'counterfactualCost',
-  'savings', 'avoidedCo2Kg',
+  'savings', 'avoidedCo2Kg', 'backupHoursEstimate',
 ]
 
-const nonNegativeNumericFields = new Set<keyof EnergyInterval>(
+const nonNegativeNumericFields = new Set<keyof AnnualEnergyInterval>(
   numericFields.filter((field) => field !== 'temperatureF' && field !== 'savings'),
 )
 const categories: readonly LoadCategory[] = [
@@ -197,6 +203,9 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     tripCount: 0,
   }))
   let totalsValid = true
+  let annualPotentialSolarKwh = 0
+  let outageCount = 0
+  let trailingHomeKwh = 0
 
   if (records.length !== scenario.records) {
     error(`record count must be ${scenario.records}; received ${records.length}`)
@@ -227,7 +236,7 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
       seenIso.add(candidate.iso)
     }
 
-    const record = candidate as unknown as EnergyInterval
+    const record = candidate as unknown as AnnualEnergyInterval
     let recordTotalsValid = true
     numericFields.forEach((field) => {
       const value = candidate[field]
@@ -240,6 +249,17 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
       }
     })
     if (typeof candidate.evAvailable !== 'boolean') error(`index ${index}: evAvailable must be boolean`)
+    const expectedGridStatus = expected === undefined ? 'connected' : gridStatusAt(expected.iso)
+    if (candidate.gridStatus !== expectedGridStatus) error(`index ${index}: grid status must match outage schedule`)
+    if (typeof candidate.backupPowerLimited !== 'boolean') {
+      error(`index ${index}: backupPowerLimited must be boolean`)
+    }
+    if (expectedGridStatus === 'outage') {
+      outageCount += 1
+      if (record.evKwh !== 0 || record.gridImportKwh !== 0 || record.gridExportKwh !== 0) {
+        error(`index ${index}: outage cannot charge EV or exchange grid energy`)
+      }
+    }
     if (!dayTypes.includes(candidate.dayType as DayType)) error(`index ${index}: invalid dayType`)
     if (!weatherStates.includes(candidate.weatherState as WeatherState)) error(`index ${index}: invalid weatherState`)
     if (
@@ -309,6 +329,12 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     if (record.solarKw > scenario.solar.capacityKw + tolerance) {
       error(`index ${index}: solar exceeds configured capacity`)
     }
+    if (!closeEnough(record.solarPotentialKwh, record.solarKwh + record.curtailedSolarKwh)) {
+      error(`index ${index}: solar potential does not reconcile curtailment`)
+    }
+    if (record.unservedHomeKwh > record.homeKwh + tolerance) {
+      error(`index ${index}: unserved home energy exceeds demand`)
+    }
     if (expected !== undefined) {
       const daylight = daylightWindow(expected)
       if (
@@ -320,11 +346,11 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     }
 
     if (
-      record.batterySocStartKwh < reserveKwh - tolerance ||
+      record.batterySocStartKwh < -tolerance ||
       record.batterySocStartKwh > scenario.battery.capacityKwh + tolerance
     ) error(`index ${index}: battery start is outside reserve/capacity bounds`)
     if (
-      record.batterySocEndKwh < reserveKwh - tolerance ||
+      record.batterySocEndKwh < -tolerance ||
       record.batterySocEndKwh > scenario.battery.capacityKwh + tolerance
     ) error(`index ${index}: battery end is outside reserve/capacity bounds`)
     if (index === 0 && !closeEnough(record.batterySocStartKwh, initialBatteryKwh)) {
@@ -339,6 +365,10 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
       record.batterySocEndKwh,
       record.batterySocStartKwh + record.batteryChargeKwh - record.batteryDischargeKwh,
     )) error(`index ${index}: battery state equation is invalid`)
+    if (expectedGridStatus === 'connected' &&
+      record.batteryDischargeKwh > Math.max(0, record.batterySocStartKwh - reserveKwh) + tolerance) {
+      error(`index ${index}: connected dispatch uses backup reserve`)
+    }
     if (record.batteryChargeKwh > tolerance && record.batteryDischargeKwh > tolerance) {
       error(`index ${index}: simultaneous battery charge and discharge`)
     }
@@ -380,7 +410,7 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     }
 
     const supply = record.solarKwh + record.batteryDischargeKwh + record.gridImportKwh
-    const demand = record.homeKwh + record.evKwh + record.batteryChargeKwh +
+    const demand = record.homeKwh - record.unservedHomeKwh + record.evKwh + record.batteryChargeKwh +
       record.gridExportKwh + record.chargeLossKwh + record.dischargeLossKwh
     if (!closeEnough(supply, demand)) error(`index ${index}: energy balance error exceeds tolerance`)
 
@@ -467,7 +497,7 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
       if (validTransfers) {
         ;[
           ['solar source', routeTotals.solar, record.solarKwh],
-          ['home destination', routeTotals.home, record.homeKwh],
+          ['home destination', routeTotals.home, record.homeKwh - record.unservedHomeKwh],
           ['EV destination', routeTotals.ev, record.evKwh],
           ['grid import', routeTotals.gridImport, record.gridImportKwh],
           ['grid export', routeTotals.gridExport, record.gridExportKwh],
@@ -488,18 +518,23 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     }
 
     try {
-      const routed = routeInterval({
-        solarKwh: record.solarKwh,
+      const routed = routeAnnualInterval({
+        solarKwh: record.solarPotentialKwh,
         homeKwh: record.homeKwh,
         evKwh: record.evKwh,
         batterySocKwh: record.batterySocStartKwh,
         minuteOfDay: record.minuteOfDay,
-      }, scenario)
+      }, expectedGridStatus)
       routedNumericFields.forEach((field) => {
         if (!closeEnough(record[field], routed[field])) {
           error(`index ${index}: routing ${field} does not match canonical routing`)
         }
       })
+      if (!closeEnough(record.solarKwh, routed.actualSolarKwh) ||
+        !closeEnough(record.curtailedSolarKwh, routed.curtailedSolarKwh) ||
+        !closeEnough(record.unservedHomeKwh, routed.unservedHomeKwh)) {
+        error(`index ${index}: outage routing does not match solar and served demand`)
+      }
       if (Array.isArray(transferValue)) {
         if (transferValue.length !== routed.transfers.length) {
           error(`index ${index}: routing transfer count does not match canonical routing`)
@@ -529,13 +564,13 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
     }
 
     try {
-      const accounting = accountInterval({
+      const accounting = accountAnnualInterval({
         tou: record.tou,
         homeKwh: record.homeKwh,
         evKwh: record.evKwh,
         gridImportKwh: record.gridImportKwh,
         gridExportKwh: record.gridExportKwh,
-      }, scenario)
+      }, expectedGridStatus)
       ;(Object.keys(accounting) as Array<keyof typeof accounting>).forEach((field) => {
         if (!closeEnough(record[field], accounting[field])) {
           error(`index ${index}: accounting ${field} does not match interval inputs`)
@@ -545,9 +580,26 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
       error(`index ${index}: accounting inputs are invalid`)
     }
 
+    const homeForEstimate = typeof record.homeKwh === 'number' && Number.isFinite(record.homeKwh)
+      ? record.homeKwh
+      : 0
+    trailingHomeKwh += homeForEstimate
+    if (index >= 12) {
+      const oldHome = records[index - 12]?.homeKwh
+      if (typeof oldHome === 'number' && Number.isFinite(oldHome)) trailingHomeKwh -= oldHome
+    }
+    if (recordTotalsValid) {
+      const backup = estimateBackup(record.batterySocEndKwh, trailingHomeKwh, Math.min(index + 1, 12))
+      if (!closeEnough(record.backupHoursEstimate, backup.hours) ||
+        record.backupPowerLimited !== backup.powerLimited) {
+        error(`index ${index}: backup estimate does not match recent home demand`)
+      }
+    }
+
     if (expected !== undefined && recordTotalsValid) {
       const totals = monthly[expected.month - 1]!
-      totals.solarKwh += record.solarKwh
+      totals.solarKwh += record.solarPotentialKwh
+      annualPotentialSolarKwh += record.solarPotentialKwh
       totals.homeKwh += record.homeKwh
       totals.evKwh += record.evKwh
       totals.tripKwh += record.tripKwh
@@ -577,6 +629,8 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
 
   if (errors.length >= maximumErrors) return errors
 
+  if (outageCount !== 84) error(`outage schedule must contain 84 intervals; found ${outageCount}`)
+
   days.forEach((day) => {
     if (day.tripCount !== 1) {
       error(`day ${day.dayOfYear}: expected exactly one positive EV trip; found ${day.tripCount}`)
@@ -600,7 +654,7 @@ const runValidation = (records: readonly EnergyInterval[]): string[] => {
         error(`month ${profile.month} EV charge total is outside the 250–450 kWh envelope`)
       }
     })
-    const annualSolarError = __annualSolarTotalError(annual.solarKwh)
+    const annualSolarError = __annualSolarTotalError(annualPotentialSolarKwh)
     if (annualSolarError !== null) error(annualSolarError)
     if (annual.homeKwh < 13_500 - tolerance || annual.homeKwh > 17_500 + tolerance) {
       error('annual home total is outside the 13500–17500 kWh envelope')

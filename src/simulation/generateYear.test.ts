@@ -89,7 +89,7 @@ const applyCoherentLateNightDischarge = (records: EnergyInterval[]) => {
 }
 
 describe('generateYear', () => {
-  let records: readonly EnergyInterval[]
+  let records: ReturnType<typeof generateYear>
 
   beforeAll(() => {
     records = generateYear()
@@ -149,7 +149,7 @@ describe('generateYear', () => {
     const categoryTotals = Object.fromEntries(categories.map((category) => [category, 0])) as Record<LoadCategory, number>
     records.forEach((record) => {
       const totals = monthly[record.month - 1]!
-      totals.solar += record.solarKwh
+      totals.solar += record.solarPotentialKwh
       totals.home += record.homeKwh
       totals.ev += record.evKwh
       totals.trip += record.tripKwh
@@ -164,7 +164,11 @@ describe('generateYear', () => {
       expect(monthly[index]!.trip).toBe(scenario.ev.targetMonthlyKwh)
     })
     const totals = aggregateIntervals(records)
-    expect(totals.solarKwh).toBeCloseTo(scenario.solar.annualReferenceKwh, 6)
+    expect(totals.solarKwh).toBeLessThanOrEqual(scenario.solar.annualReferenceKwh)
+    expect(monthly.reduce((sum, month) => sum + month.solar, 0)).toBeCloseTo(
+      scenario.solar.annualReferenceKwh,
+      6,
+    )
     expect(totals.homeKwh).toBeCloseTo(scenario.home.targetAnnualKwh, 7)
     expect(totals.evKwh).toBeCloseTo(scenario.ev.targetAnnualKwh, 7)
     expect(Object.values(categoryTotals).every((total) => total > 0)).toBe(true)
