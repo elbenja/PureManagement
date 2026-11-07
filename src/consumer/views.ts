@@ -6,6 +6,7 @@ import type {
   Transfer,
   WeatherState,
 } from '../domain/energy'
+import { isAnnualEnergyInterval } from '../domain/annualEnergy'
 import { LOS_ANGELES_AUGUST_2026 } from '../scenario/losAngelesAugust2026'
 import {
   aggregateIntervals,
@@ -60,7 +61,7 @@ export interface GridNodeView {
   label: 'Grid'
   powerKw: number
   direction: 'importing' | 'exporting' | 'idle'
-  status: 'importing' | 'exporting' | 'idle'
+  status: 'importing' | 'exporting' | 'idle' | 'outage'
   importKw: number
   exportKw: number
 }
@@ -675,7 +676,9 @@ export const getLiveFrame = (
         label: 'Grid',
         powerKw: gridFlow.powerKw,
         direction: gridDirection,
-        status: gridDirection,
+        status: isAnnualEnergyInterval(record) && record.gridStatus === 'outage'
+          ? 'outage'
+          : gridDirection,
         importKw: gridFlow.inboundKw,
         exportKw: gridFlow.outboundKw,
       },

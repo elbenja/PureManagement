@@ -57,7 +57,7 @@ describe('SimulationInspector', () => {
     fireEvent.change(screen.getByLabelText('Simulation interval'), {
       target: { value: String(outageIndex) },
     })
-    expect(screen.getByText('outage')).toBeVisible()
+    expect(screen.getAllByText('outage')).toHaveLength(2)
     expect(screen.getByText('Unserved home demand')).toBeVisible()
   }, 30_000)
 

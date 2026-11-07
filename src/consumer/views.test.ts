@@ -282,6 +282,18 @@ describe('annual history views', () => {
     records.findIndex((record) =>
       record.month === month && record.day === day && record.minuteOfDay === minuteOfDay)
 
+  it('exposes the simulated outage through the live grid node', () => {
+    const outageIndex = indexAt(1, 15, 15 * 60)
+    const frame = getLiveFrame(records, outageIndex)!
+    expect(frame.nodes[4]).toMatchObject({
+      id: 'grid',
+      status: 'outage',
+      powerKw: 0,
+      importKw: 0,
+      exportKw: 0,
+    })
+  })
+
   const expectViewToMatchDirectAggregation = (view: HistoryView) => {
     const expectedTotals = aggregateIntervals(view.records)
     for (const key of Object.keys(expectedTotals) as (keyof EnergyTotals)[]) {
