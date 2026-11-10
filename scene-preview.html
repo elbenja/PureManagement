@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>House Scene Preview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1a1c26;
+        font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      #scene {
+        position: fixed;
+        inset: 0;
+      }
+      #scene canvas {
+        display: block;
+      }
+      .hud {
+        position: fixed;
+        left: 50%;
+        bottom: 20px;
+        transform: translateX(-50%);
+        width: min(1080px, calc(100% - 32px));
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        color: #f3f3fa;
+        pointer-events: none;
+      }
+      .panel {
+        pointer-events: auto;
+        background: rgba(23, 23, 30, 0.78);
+        backdrop-filter: blur(16px) saturate(1.2);
+        -webkit-backdrop-filter: blur(16px) saturate(1.2);
+        border-radius: 22px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      }
+      .caption {
+        align-self: flex-start;
+        max-width: 100%;
+        box-sizing: border-box;
+        padding: 12px 18px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 12px;
+      }
+      .caption strong {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .caption span {
+        font-size: 13px;
+        color: #c9cbdd;
+        font-variant-numeric: tabular-nums;
+      }
+      .caption p {
+        margin: 0;
+        width: 100%;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #e1e2ee;
+      }
+      .scenarios {
+        padding: 6px;
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .scenarios::-webkit-scrollbar {
+        display: none;
+      }
+      .scenarios button {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 44px;
+        padding: 0 16px 0 8px;
+        border: 0;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #f3f3fa;
+        font: 600 13px/1 'Inter', system-ui, sans-serif;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: background 0.3s, color 0.3s;
+      }
+      .scenarios button:hover {
+        background: rgba(255, 255, 255, 0.16);
+      }
+      .scenarios button b {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: rgba(255, 255, 255, 0.14);
+        font-weight: 700;
+        transition: background 0.3s, color 0.3s;
+      }
+      .scenarios button[aria-pressed='true'] {
+        background: #f3f3fa;
+        color: #15151f;
+      }
+      .scenarios button[aria-pressed='true'] b {
+        background: #7df2cc;
+        color: #0b2b22;
+      }
+      .scenarios button:focus-visible {
+        outline: 2px solid #7df2cc;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="scene"></div>
+    <div class="hud">
+      <section class="panel caption" aria-live="polite">
+        <strong id="title"></strong>
+        <span id="meta"></span>
+        <p id="sentence"></p>
+      </section>
+      <nav class="panel scenarios" id="scenarios" aria-label="Scenario"></nav>
+    </div>
+    <script type="module" src="/src/scene3d/preview.ts"></script>
+  </body>
+</html>
