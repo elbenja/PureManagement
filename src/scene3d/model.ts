@@ -970,9 +970,6 @@ export interface Diorama {
   windows: Anchor[]
   batteryFace: Anchor
   chargerLed: THREE.MeshStandardMaterial
-  car: THREE.Group
-  carMaterials: THREE.Material[]
-  cable: THREE.Mesh
   cableCurve: THREE.Curve<THREE.Vector3>
   dropCurve: THREE.Curve<THREE.Vector3>
   transformer: THREE.Vector3
@@ -1038,9 +1035,6 @@ export function buildDiorama(): Diorama {
     windows: house.windows,
     batteryFace: house.batteryFace,
     chargerLed: m.chargerLed,
-    car,
-    carMaterials: [m.carBody, m.carTrim, m.carTire, m.carRim, m.headlight, m.taillight, m.chargeCable],
-    cable: cable.mesh,
     cableCurve: cable.curve,
     dropCurve: grid.dropCurve,
     transformer: grid.transformer,

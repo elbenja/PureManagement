@@ -11,14 +11,17 @@ const RAIN_HEIGHT = 11
 
 // --- Clouds ----------------------------------------------------------------
 
-/** Each cloud drifts across the view on a line behind the house (x + z = c). */
+/**
+ * Each cloud drifts across the view on a line behind the house (x + z = c).
+ * The lines keep every cloud clear of the pole and the tall back tree, even at storm size.
+ */
 const CLOUD_LAYOUT = [
-  { c: -6.4, y: 6.6, s: 1.1, phase: 0.05, speed: 0.35 },
-  { c: -12.4, y: 6.1, s: 1.4, phase: 0.42, speed: 0.28 },
+  { c: -8.3, y: 7.2, s: 1.1, phase: 0.05, speed: 0.35 },
+  { c: -14.8, y: 5.5, s: 1.4, phase: 0.42, speed: 0.28 },
   { c: -7.4, y: 7.0, s: 0.9, phase: 0.72, speed: 0.42 },
   { c: -12.9, y: 6.6, s: 1.2, phase: 0.9, speed: 0.3 },
-  { c: -6.0, y: 6.4, s: 1.3, phase: 0.27, speed: 0.33 },
-  { c: -13.4, y: 6.2, s: 1.5, phase: 0.6, speed: 0.25 },
+  { c: -9.0, y: 7.5, s: 1.3, phase: 0.27, speed: 0.33 },
+  { c: -15.5, y: 5.5, s: 1.5, phase: 0.6, speed: 0.25 },
 ]
 const CLOUD_TRACK = 44
 type Blob = [x: number, y: number, z: number, r: number]

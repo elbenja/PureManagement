@@ -6,8 +6,8 @@ import { batteryState, type Scenario } from './scenarios'
 // colours: the battery's level bar (amber near the 15 % reserve, rising or
 // falling pulse while it charges or discharges, a hot glow at the 5 kW limit),
 // the charger light, current pulsing along the charge cable and the service
-// drop (toward the house on import, away on export), a solar sheen, the car
-// arriving or leaving, and sparks at the transformer during an outage.
+// drop (toward the house on import, away on export), a solar sheen, and sparks
+// at the transformer during an outage.
 
 const COLOR = {
   bat: new THREE.Color('#4FE9BE'),
@@ -16,7 +16,6 @@ const COLOR = {
   exp: new THREE.Color('#A99BFF'),
   ev: new THREE.Color('#62BDFF'),
   mint: new THREE.Color('#7DF2CC'),
-  idle: new THREE.Color('#dfe6e2'),
   spark: new THREE.Color('#ffd27a'),
 }
 
@@ -94,8 +93,6 @@ export function createEnergy(d: Diorama, pixelRatio: number): EnergyCues {
   let burstAt = -10
   let nextBurst = 0
 
-  const carHome = d.car.position.clone()
-  let presence = -1
   let shownPct = -1
   let solar = 0
   const color = new THREE.Color()
@@ -132,29 +129,14 @@ export function createEnergy(d: Diorama, pixelRatio: number): EnergyCues {
         pulse.position.y = bottom + height * (state === 'charging' ? run : 1 - run)
       }
 
-      // Charger light: soft white with no car, mint when plugged in, breathing blue while charging.
+      // Charger light: the car is always parked and plugged in; mint at rest, breathing blue while charging.
       const charging = e.ev === 'charging'
-      if (charging) d.chargerLed.emissive.copy(COLOR.ev)
-      else d.chargerLed.emissive.copy(e.ev === 'idle' ? COLOR.mint : COLOR.idle)
+      d.chargerLed.emissive.copy(charging ? COLOR.ev : COLOR.mint)
       d.chargerLed.color.copy(d.chargerLed.emissive)
-      d.chargerLed.emissiveIntensity = charging ? 0.8 + 1.2 * (0.5 + 0.5 * Math.sin(t * 3)) : e.ev === 'idle' ? 1 : 0.4
-
-      // The car drives in or away.
-      const home = e.ev === 'away' ? 0 : 1
-      presence = presence < 0 ? home : presence + (home - presence) * Math.min(1, dt * 2.5)
-      const solid = presence > 0.99
-      for (const material of d.carMaterials) {
-        if (material.transparent === solid) {
-          material.transparent = !solid
-          material.needsUpdate = true
-        }
-        material.opacity = presence
-      }
-      d.car.position.x = carHome.x + (1 - presence) * 0.9
-      d.car.visible = d.cable.visible = presence > 0.01
+      d.chargerLed.emissiveIntensity = charging ? 0.8 + 1.2 * (0.5 + 0.5 * Math.sin(t * 3)) : 1
 
       // Pulses along the charge cable (from the grid in this prototype's data).
-      cable.mesh.visible = charging && presence > 0.5
+      cable.mesh.visible = charging
       if (cable.mesh.visible) {
         cable.material.color.copy(e.grid === 'import' ? COLOR.imp : COLOR.bat).multiplyScalar(2.5)
         flow(cable.mesh, d.cableCurve, 6, t * 0.55, 1)
