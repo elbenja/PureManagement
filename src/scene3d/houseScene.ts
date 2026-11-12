@@ -25,9 +25,9 @@ const ELEVATION = THREE.MathUtils.degToRad(25)
 const AZIMUTH = Math.PI / 4
 const TARGET = new THREE.Vector3(0, 1.4, 0)
 // Screen-space extent of the diorama (world units) plus breathing room,
-// zoomed out 20 % so the house reads between the dashboard's side panels.
-const FIT_WIDTH = 21.1 * 1.18 * 1.25
-const FIT_HEIGHT = 13.1 * 1.25 * 1.25
+// zoomed out so the house and pole read between the dashboard's side panels.
+const FIT_WIDTH = 21.1 * 1.18 * 1.5
+const FIT_HEIGHT = 13.1 * 1.25 * 1.5
 /** Seconds a scenario change takes. */
 const BLEND = 1.8
 

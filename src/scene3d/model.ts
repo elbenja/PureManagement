@@ -656,7 +656,7 @@ function stick(from: THREE.Vector3, to: THREE.Vector3, radius: number, material:
 function buildGridConnection(m: Materials) {
   const grid = new THREE.Group()
   grid.name = 'grid'
-  const base = new THREE.Vector3(3.9, 0, -7.2)
+  const base = new THREE.Vector3(3.0, 0, -7.3)
   const at = (dx: number, y: number, dz = 0) => new THREE.Vector3(base.x + dx, y, base.z + dz)
 
   grid.add(stick(base, at(0, 6.9), 0.24, m.pole, 0.78))
