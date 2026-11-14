@@ -22,7 +22,7 @@ const COLOR = {
   appliance: '#f7f6f3',
   led: '#5fe3a1',
   carBody: '#e6e8eb',
-  carGlass: '#202328',
+  carGlass: '#0e1014',
   carTrim: '#4a4d52',
   tire: '#2a2a2d',
   rim: '#c9ccd0',
@@ -389,21 +389,24 @@ function buildHouse(m: Materials) {
 }
 
 // ---------------------------------------------------------------------------
-// Car: a compact electric hatchback, nose toward +x. The body is lofted from
-// rounded cross-sections, so it curves in plan, in profile and in section.
+// Car: a stylized electric crossover coupe, nose toward +x: one arching roofline
+// from a short sloping hood to a ducktail, a dark glass roof, full-width light
+// bars and clad wheel arches. The body is lofted from rounded cross-sections,
+// so it curves in plan, in profile and in section.
 
 const CAR_POSITION = new THREE.Vector3(4.65, 0, 0.55)
 const CAR_HALF_LENGTH = 1.97
 const CAR_HALF_WIDTH = 0.88
-const WHEEL_X = 1.25
-const WHEEL_R = 0.36
+const WHEEL_X = 1.2
+const WHEEL_R = 0.37
 const ARCH_R = 0.44
-const SECTION = 4 // superellipse exponent: higher = squarer cross-section
+const SECTION = 3.6 // superellipse exponent: higher = squarer cross-section
 
 type Key = [x: number, y: number]
 const ROOF_LINE: Key[] = [
-  [-1.97, 0.55], [-1.94, 0.8], [-1.88, 1.05], [-1.75, 1.28], [-1.5, 1.44], [-1.1, 1.5], [-0.5, 1.5],
-  [0, 1.42], [0.3, 1.25], [0.7, 1.0], [1.0, 0.95], [1.5, 0.88], [1.8, 0.8], [1.92, 0.7], [1.97, 0.5],
+  // tail, ducktail lip, rear glass, roof peak, windshield, hood, nose
+  [-1.97, 0.52], [-1.96, 0.82], [-1.92, 1.02], [-1.78, 1.05], [-1.5, 1.14], [-1.0, 1.3], [-0.5, 1.41], [-0.1, 1.45],
+  [0.2, 1.4], [0.5, 1.19], [0.8, 0.98], [1.2, 0.93], [1.6, 0.85], [1.85, 0.75], [1.94, 0.64], [1.97, 0.48],
 ]
 const FLOOR_LINE: Key[] = [[-1.97, 0.46], [-1.9, 0.3], [-1.75, 0.25], [1.75, 0.25], [1.9, 0.3], [1.97, 0.44]]
 
@@ -432,7 +435,8 @@ function carBottom(x: number) {
 
 const halfWidthAt = (x: number) =>
   CAR_HALF_WIDTH * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(x) / CAR_HALF_LENGTH, 5)), 1 / 5)
-const beltAt = (x: number) => 0.98 + Math.max(0, -x) * 0.03
+/** The window line, rising toward the tail. */
+const beltAt = (x: number) => 0.93 - 0.05 * x
 
 /** The cabin narrows above the belt line (tumblehome). */
 function taper(x: number, y: number) {
@@ -474,24 +478,26 @@ function endX(y: number, z: number, dir: 1 | -1) {
 
 /**
  * Car paint decided per pixel from the body's local position and normal, so window
- * and trim edges stay crisp at any zoom: glass above the belt line, a body-colored
- * roof and C-pillar, dark trim on the arches, sills, grille, bumpers and underside.
+ * and trim edges stay crisp at any zoom: one dark glass canopy (windshield, roof and
+ * rear window), side windows that taper to a point over the rear wheel under a
+ * body-colored roof rail, and dark trim on the arches, sills, bumpers and underside.
  */
 function carBodyMaterial() {
   const f = (n: number) => n.toFixed(3)
-  const material = new THREE.MeshPhysicalMaterial({ roughness: 0.32, metalness: 0.05, clearcoat: 1, clearcoatRoughness: 0.1 })
+  const material = new THREE.MeshPhysicalMaterial({ roughness: 0.32, metalness: 0.05, clearcoat: 0.35, clearcoatRoughness: 0.25 })
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uPaint = { value: new THREE.Color(COLOR.carBody) }
     shader.uniforms.uGlass = { value: new THREE.Color(COLOR.carGlass) }
     shader.uniforms.uTrim = { value: new THREE.Color(COLOR.carTrim) }
-    shader.vertexShader = 'varying vec3 vCarPos;\nvarying vec3 vCarNormal;\n' + shader.vertexShader.replace(
+    shader.vertexShader = 'attribute vec2 carInfo;\nvarying vec2 vCarInfo;\nvarying vec3 vCarPos;\nvarying vec3 vCarNormal;\n' + shader.vertexShader.replace(
       '#include <begin_vertex>',
-      '#include <begin_vertex>\nvCarPos = position;\nvCarNormal = normal;',
+      '#include <begin_vertex>\nvCarPos = position;\nvCarNormal = normal;\nvCarInfo = carInfo;',
     )
     shader.fragmentShader =
       /* glsl */ `
       varying vec3 vCarPos;
       varying vec3 vCarNormal;
+      varying vec2 vCarInfo; // roof height and roof half-width at this length
       uniform vec3 uPaint;
       uniform vec3 uGlass;
       uniform vec3 uTrim;
@@ -510,24 +516,36 @@ function carBodyMaterial() {
           /* glsl */ `#include <color_fragment>
           vec3 carP = vCarPos;
           vec3 carN = normalize(vCarNormal);
-          float belt = 0.98 + max(0.0, -carP.x) * 0.03;
+          float belt = 0.93 - 0.05 * carP.x;
+          float az = abs(carP.z);
           float trimMask = 0.0;
           float glassMask = 0.0;
           if (carN.y < -0.6) trimMask = 1.0;
-          if (carP.y < carArchBottom(carP.x) + 0.07 && abs(abs(carP.x) - ${f(WHEEL_X)}) < ${f(ARCH_R + 0.05)}) trimMask = 1.0;
-          if (carP.y < 0.36 && abs(carP.x) < ${f(WHEEL_X)} && abs(carN.z) > 0.3) trimMask = 1.0;
-          if (carP.x > 1.72 && carP.y > 0.5 && carP.y < 0.62) trimMask = 1.0;
-          if (abs(carP.x) > 1.86 && carP.y < 0.47) trimMask = 1.0;
-          if (carP.y > belt + 0.015) {
-            if (carP.x > -0.02) glassMask = 1.0;
-            else if (carP.x > -1.48) glassMask = carN.y < 0.85 ? 1.0 : 0.0;
-            else if (carP.x < -1.62 && carP.y > belt + 0.1 && abs(carN.z) < 0.6) glassMask = 1.0;
+          // Wheel-arch cladding, sills, rear diffuser, front intake and fog slits.
+          if (carN.y < 0.45 && carP.y < carArchBottom(carP.x) + 0.08 && abs(abs(carP.x) - ${f(WHEEL_X)}) < ${f(ARCH_R + 0.07)}) trimMask = 1.0;
+          if (carP.y < 0.37 && abs(carP.x) < ${f(WHEEL_X)} && abs(carN.z) > 0.3) trimMask = 1.0;
+          if (carP.x < -1.8 && carP.y < 0.58) trimMask = 1.0;
+          if (carP.x > 1.8 && carP.y < 0.41 && az < 0.6) trimMask = 1.0;
+          if (carP.x > 1.55 && carP.y > 0.47 && carP.y < 0.56 && az > 0.42 && az < 0.8) trimMask = 1.0;
+          if (carP.x > 1.5 && carP.y > 0.655 && carP.y < 0.69) trimMask = 1.0; // dark housing under the light bar
+          // Glass canopy: windshield, roof and rear window in one piece.
+          if (carN.y > 0.2 && az < 0.74 * vCarInfo.y && carP.x > -1.72 && carP.x < 0.8) glassMask = 1.0;
+          // Side windows under the roof rail, raked at the front, pointed at the rear.
+          float sideTop = vCarInfo.x - 0.1 - max(0.0, -0.5 - carP.x) * 0.13;
+          if (az >= 0.74 * vCarInfo.y && carP.y > belt && carP.y < sideTop && carP.x < 0.62 - (carP.y - 0.95) * 1.25) {
+            glassMask = 1.0;
+            if (abs(carP.x + 0.4) < 0.03) { glassMask = 0.0; trimMask = 1.0; } // B-pillar
           }
           diffuseColor.rgb = mix(mix(uPaint, uTrim, trimMask), uGlass, glassMask);`,
         )
         .replace(
           '#include <roughnessmap_fragment>',
-          '#include <roughnessmap_fragment>\nroughnessFactor = mix(mix(roughnessFactor, 0.6, trimMask), 0.12, glassMask);',
+          '#include <roughnessmap_fragment>\nroughnessFactor = mix(mix(roughnessFactor, 0.6, trimMask), 0.45, glassMask);',
+        )
+        // Glass stays dark: mute its reflections so the midday sky does not wash it out.
+        .replace(
+          '#include <lights_physical_fragment>',
+          '#include <lights_physical_fragment>\nmaterial.specularColor *= mix(1.0, 0.12, glassMask);\nmaterial.specularF90 *= mix(1.0, 0.12, glassMask);\nmaterial.clearcoat *= 1.0 - glassMask;',
         )
   }
   return material
@@ -537,6 +555,7 @@ function carBodyGeometry() {
   const U = 140
   const V = 96
   const positions: number[] = []
+  const info: number[] = []
   const indices: number[] = []
   const p = new THREE.Vector3()
   const q = new THREE.Vector3()
@@ -563,6 +582,7 @@ function carBodyGeometry() {
       }
       carPoint(x, v, p)
       positions.push(p.x, p.y, p.z)
+      info.push(carTop(x), halfWidthAt(x) * 0.8)
     }
   }
   for (let i = 0; i < U; i++) {
@@ -576,6 +596,7 @@ function carBodyGeometry() {
   }
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('carInfo', new THREE.Float32BufferAttribute(info, 2))
   geometry.setIndex(indices)
   geometry.computeVertexNormals()
   return geometry
@@ -599,28 +620,38 @@ function buildCar(m: Materials) {
   car.add(new THREE.Mesh(carBodyGeometry(), m.carBody))
   car.add(box(3.3, 0.22, 1.3, m.carTrim, 0, 0.36, 0, 0.05)) // chassis between the wheels
 
-  car.add(lightBar(0.69, 1, 0.58, 0.022, m.headlight))
-  car.add(lightBar(1.0, -1, 0.64, 0.026, m.taillight))
+  // Full-width light bars: white along the hood's leading edge, red under the ducktail.
+  car.add(lightBar(0.71, 1, 0.72, 0.02, m.headlight))
+  car.add(lightBar(0.93, -1, 0.72, 0.026, m.taillight))
+  const paint = mat(COLOR.carBody, { roughness: 0.32 })
   for (const s of [1, -1]) {
-    car.add(box(0.17, 0.09, 0.12, m.carTrim, 0.62, 1.04, s * (sideZ(0.62, 1.0) + 0.05), 0.035))
+    car.add(box(0.2, 0.1, 0.14, paint, 0.6, 1.0, s * (sideZ(0.6, 0.93) + 0.07), 0.04)) // mirrors
+    for (const x of [0.12, -0.78]) {
+      car.add(box(0.17, 0.028, 0.02, m.carTrim, x, beltAt(x) - 0.13, s * (sideZ(x, beltAt(x) - 0.13) + 0.004), 0.008)) // door handles
+    }
   }
   car.add(box(0.12, 0.09, 0.02, m.carTrim, CHARGE_PORT.x, CHARGE_PORT.y, CHARGE_PORT.z, 0.008))
 
-  // Rounded tires with five-spoke aero rims.
-  const tire = new THREE.TorusGeometry(WHEEL_R - 0.1, 0.1, 12, 32).scale(1, 1, 1.25)
-  const rim = new THREE.CylinderGeometry(0.26, 0.26, 0.2, 28).rotateX(Math.PI / 2)
-  const spoke = new THREE.BoxGeometry(0.05, 0.22, 0.04).translate(0, 0.11, 0)
+  // Chunky tires with turbine-style rims: a bright lip, swept blades and a hub cap.
+  const tire = new THREE.TorusGeometry(WHEEL_R - 0.11, 0.11, 12, 32).scale(1, 1, 1.25)
+  const rim = new THREE.CylinderGeometry(0.255, 0.255, 0.2, 28).rotateX(Math.PI / 2)
+  const lip = new THREE.TorusGeometry(0.245, 0.018, 8, 32)
+  const hub = new THREE.CylinderGeometry(0.055, 0.055, 0.03, 16).rotateX(Math.PI / 2)
+  const blade = new THREE.BoxGeometry(0.075, 0.21, 0.03).translate(0.03, 0.115, 0)
   for (const x of [WHEEL_X, -WHEEL_X]) {
     for (const s of [1, -1]) {
       const wheel = new THREE.Group()
-      wheel.position.set(x, WHEEL_R, s * (CAR_HALF_WIDTH - 0.14))
+      wheel.position.set(x, WHEEL_R, s * (CAR_HALF_WIDTH - 0.15))
       wheel.add(new THREE.Mesh(tire, m.carTire), new THREE.Mesh(rim, m.carTrim))
-      for (let k = 0; k < 5; k++) {
-        const arm = new THREE.Mesh(spoke, m.carRim)
-        arm.position.z = s * 0.1
-        arm.rotation.z = (k / 5) * Math.PI * 2 + x
-        wheel.add(arm)
+      const face = new THREE.Group()
+      face.position.z = s * 0.1
+      face.add(new THREE.Mesh(lip, m.carRim), new THREE.Mesh(hub, m.carRim))
+      for (let k = 0; k < 7; k++) {
+        const arm = new THREE.Mesh(blade, m.carRim)
+        arm.rotation.z = (k / 7) * Math.PI * 2 + x
+        face.add(arm)
       }
+      wheel.add(face)
       car.add(wheel)
     }
   }
